@@ -143,4 +143,11 @@ public class ExchangeConnector {
             return parser.apply(root);
         }
     }
+    /**
+     * Obtiene velas históricas para cálculo de ATR (Epic 3).
+     */
+    public double[][] fetchCandles(String exchangeId, String pair, String interval, int limit) {
+        // Delegamos directamente al adaptador porque la lógica de velas es compleja y específica
+        return getAdapter(exchangeId).fetchCandles(pair, interval, limit);
+    }
 }

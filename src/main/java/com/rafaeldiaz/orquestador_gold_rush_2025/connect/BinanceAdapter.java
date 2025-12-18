@@ -59,4 +59,8 @@ public class BinanceAdapter implements ExchangeAdapter {
         // TODO: Implementar en Epic 4 (Cross Selectivo)
         throw new UnsupportedOperationException("Trading no implementado aún para este exchange");
     }
+    @Override
+    public double[][] fetchCandles(String pair, String interval, int limit) {
+        return new double[0][0]; // TODO: Implementar en Epic 3.x
+    }
 }

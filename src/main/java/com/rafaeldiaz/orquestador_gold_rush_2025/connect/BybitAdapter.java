@@ -1,9 +1,7 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025.connect;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import okhttp3.Request;
-import okhttp3.MediaType;
-import okhttp3.RequestBody;
+import okhttp3.*;
 
 public class BybitAdapter implements ExchangeAdapter {
     private final String apiKey;
@@ -100,5 +98,34 @@ public class BybitAdapter implements ExchangeAdapter {
                 .addHeader("X-BAPI-RECV-WINDOW", recvWindow)
                 .addHeader("Content-Type", "application/json") // Crítico para POST
                 .build();
+    }
+    @Override
+    public double[][] fetchCandles(String pair, String interval, int limit) {
+        // Mapeo de intervalos: Bybit usa "60" para 1h. "1" para 1m.
+        String url = BASE_URL + "/v5/market/kline?category=spot&symbol=" + pair + "&interval=" + interval + "&limit=" + limit;
+        Request request = new Request.Builder().url(url).get().build();
+
+        try (Response response = new OkHttpClient().newCall(request).execute()) {
+            if (!response.isSuccessful()) throw new RuntimeException("Error fetching candles: " + response.code());
+
+            JsonNode root = new com.fasterxml.jackson.databind.ObjectMapper().readTree(response.body().string());
+            JsonNode list = root.at("/result/list");
+
+            if (list.isArray()) {
+                double[][] candles = new double[list.size()][3];
+                for (int i = 0; i < list.size(); i++) {
+                    JsonNode kline = list.get(i);
+                    // Bybit V5 kline order: [startTime, open, high, low, close, volume, turnover]
+                    // Necesitamos High(2), Low(3), Close(4)
+                    candles[i][0] = Double.parseDouble(kline.get(2).asText()); // High
+                    candles[i][1] = Double.parseDouble(kline.get(3).asText()); // Low
+                    candles[i][2] = Double.parseDouble(kline.get(4).asText()); // Close
+                }
+                return candles;
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("Fallo al obtener velas Bybit", e);
+        }
+        return new double[0][0];
     }
 }

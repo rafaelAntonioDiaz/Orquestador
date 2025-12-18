@@ -24,4 +24,13 @@ public interface ExchangeAdapter {
      * @param price Precio límite (ignorar si es Market)
      */
     Request buildOrderRequest(String pair, String side, String type, double qty, double price);
+
+    /**
+     * Obtiene velas históricas (K-Lines) para análisis técnico (ATR).
+     * @param pair Par (ej. BTCUSDT)
+     * @param interval Intervalo ("1" para 1 minuto, "60" para 1 hora)
+     * @param limit Cantidad de velas (ej. 14 para ATR estándar)
+     * @return Array de Arrays: [[High, Low, Close], [High, Low, Close]...]
+     */
+    double[][] fetchCandles(String pair, String interval, int limit);
 }
