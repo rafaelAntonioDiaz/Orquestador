@@ -1,102 +1,120 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025.core;
 
+import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.MarketStreamer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Cerebro analítico que detecta oportunidades de arbitraje triangular.
- * Task 2.2.1 del Backlog.
+ * 🧠 CEREBRO TRIANGULAR (Sistema 1)
+ * Detecta oportunidades dentro de un mismo exchange (Bybit).
+ * Ahora calcula FEES DINÁMICOS para los 3 saltos del triángulo.
  */
 public class ArbitrageDetector implements MarketStreamer.PriceListener {
 
-    private static final Logger logger = LoggerFactory.getLogger(ArbitrageDetector.class);
+    private final ExchangeConnector connector;
+    private final TradeExecutor executor;
+    private final FeeManager feeManager; // <--- El contador de costos
 
-    // Caché de precios en memoria (Thread-Safe para acceso concurrente)
+    // Cache de precios para cálculos rápidos
     private final Map<String, Double> priceCache = new ConcurrentHashMap<>();
 
-    // Comisiones estimadas (0.1% taker x 3 patas = 0.3%)
-    // En producción esto vendrá del FeeRateManager dinámico
-    private static final double ESTIMATED_TOTAL_FEE = 0.003;
+    // Umbral mínimo NETO (después de fees)
+    private static final double MIN_NET_PROFIT = 0.5; // Queremos 0.5% limpio
 
-    // Mínimo beneficio neto esperado para gritar "EUREKA" (0.2%)
-    private static final double MIN_PROFIT_THRESHOLD = 0.002;
+    public ArbitrageDetector(ExchangeConnector connector) {
+        this.connector = connector;
+        this.executor = new TradeExecutor(connector);
+        // Inicializamos el Manager de Fees compartiendo el conector
+        this.feeManager = new FeeManager(connector);
+    }
 
     @Override
     public void onPriceUpdate(String exchange, String pair, double price, long timestamp) {
-        // 1. Actualizamos la caché instantáneamente
+        // 1. Guardar precio (ej. "PEPEUSDT" -> 0.000015)
         priceCache.put(pair, price);
 
-        // 2. Evaluamos oportunidades (Solo si tenemos los datos necesarios)
-        // Ejemplo de Ciclo: USDT -> BTC -> SOL -> USDT
-        evaluateTriangularCycle("BTC", "SOL");
+        // 2. Intentar triangular
+        // Asumimos estructura: COIN + USDT (ej. PEPE + USDT)
+        if (pair.endsWith("USDT")) {
+            String coinA = pair.replace("USDT", ""); // PEPE
+            checkTriangularArbitrage(coinA, price);
+        }
     }
 
     /**
-     * Evalúa el ciclo triangular: USDT -> A -> B -> USDT
-     * @param coinA La moneda intermedia 1 (ej. BTC)
-     * @param coinB La moneda intermedia 2 (ej. SOL)
+     * Evalúa la ruta: USDT -> CoinA -> BTC -> USDT
      */
-    private void evaluateTriangularCycle(String coinA, String coinB) {
-        // Nombres de los pares (Bybit standard)
-        String pairA_USDT = coinA + "USDT"; // BTCUSDT
-        String pairB_USDT = coinB + "USDT"; // SOLUSDT
-        String pairB_CoinA = coinB + coinA; // SOLBTC
+    private void checkTriangularArbitrage(String coinA, double priceA_USDT) {
+        String coinB = "BTC"; // Pivote estándar (Podría ser ETH o SOL en el futuro)
 
-        // Verificamos si tenemos precios para las 3 patas
-        Double priceA_USDT = priceCache.get(pairA_USDT);
+        // Necesitamos 3 precios:
+        // 1. USDT -> A (priceA_USDT) [YA LO TENEMOS]
+        // 2. A -> B    (priceA_B)    [CONSULTAR CACHÉ O API]
+        // 3. B -> USDT (priceB_USDT) [CONSULTAR CACHÉ O API]
+
+        String pairA_B = coinA + coinB; // PEPEBTC (Raro) o BTCPEPE (No existe) -> Ojo: suele ser ALTS/BTC
+        // Convención normal: Base=ALTS, Quote=BTC -> PEPEBTC.
+        // Si quiero pasar de PEPE a BTC, VENDO PEPE (Bid).
+
+        String pairB_USDT = coinB + "USDT"; // BTCUSDT
+
+        Double priceA_B = priceCache.get(pairA_B);
         Double priceB_USDT = priceCache.get(pairB_USDT);
-        Double priceB_CoinA = priceCache.get(pairB_CoinA);
 
-        if (priceA_USDT == null || priceB_USDT == null || priceB_CoinA == null) {
-            return; // Datos incompletos, esperamos
+        // Si no están en caché, intentamos fetch rápido (solo para validar lógica, en prod esto debe ser stream)
+        if (priceA_B == null || priceB_USDT == null) {
+            // Fetch asíncrono o silent fail para no bloquear el hilo del websocket
+            // Para este test "en caliente", dejaremos que el DynamicSelector pueble el caché poco a poco
+            // o hacemos un fetch rápido si es un par caliente.
+            return;
         }
 
-        // --- CÁLCULO DE LA RUTA ---
-        // Ruta: Compro A (divido), Compro B con A (divido o multiplico?), Vendo B (multiplico)
-        // Simplificación matemática del "Implied Rate" vs "Real Rate":
+        // --- CÁLCULO DE LA TRIANGULACIÓN ---
 
-        // 1. Precio Real de B en USDT (Directo)
-        double realPrice = priceB_USDT;
+        double capitalInicial = 100.0; // Simulamos $100
 
-        // 2. Precio Sintético de B en USDT (Pasando por A)
-        // Valor de 1 B -> en A (priceB_CoinA) -> en USDT (priceB_CoinA * priceA_USDT)
-        double syntheticPrice = priceB_CoinA * priceA_USDT;
+        // PASO 1: Comprar A con USDT
+        // Cantidad A = $100 / PrecioA
+        double qtyA = capitalInicial / priceA_USDT;
 
-        // 3. Calculamos la discrepancia (Spread)
-        // Si Sintético > Real: Compro B barato (USDT->B) y vendo B caro (B->A->USDT) ... espera, al revés.
+        // PASO 2: Vender A por B (PEPE -> BTC)
+        // Cantidad B = QtyA * Precio(PEPE/BTC) [Si vendemos]
+        // Ojo: En par PEPEBTC, el precio es cuántos BTC dan por 1 PEPE.
+        double qtyB = qtyA * priceA_B;
 
-        // Vamos a simular $100 USDT en el ciclo forward:
-        // Paso 1: USDT -> A (Compro A) => 100 / priceA_USDT
-        // Paso 2: A -> B (Compro B con A) => (Amt A) / priceB_CoinA  <-- OJO: Depende si el par es B/A o A/B.
-        // Asumiendo par estándar SOLBTC (Base SOL, Quote BTC):
-        // Para tener SOL pagando BTC, divido? No, el precio es cuantos BTC vale 1 SOL.
-        // Tengo BTC, quiero SOL. 1 SOL = 0.00x BTC.
-        // Amount SOL = Amount BTC / Price_SOLBTC.
+        // PASO 3: Vender B por USDT (BTC -> USDT)
+        double finalUSDT = qtyB * priceB_USDT;
 
-        // Paso 3: B -> USDT (Vendo B) => Amt B * priceB_USDT.
+        // --- CÁLCULO DE GANANCIA BRUTA ---
+        double grossProfitUSD = finalUSDT - capitalInicial;
+        double grossPercent = (grossProfitUSD / capitalInicial) * 100.0;
 
-        double startCapital = 100.0;
-        double amtA = startCapital / priceA_USDT;       // Buy BTC
-        double amtB = amtA / priceB_CoinA;              // Buy SOL with BTC
-        double endCapital = amtB * priceB_USDT;         // Sell SOL for USDT
+        // Si no hay ganancia bruta, ni nos molestamos en calcular fees
+        if (grossPercent <= 0.1) return;
 
-        double grossProfitParams = (endCapital - startCapital) / startCapital;
-        double netProfit = grossProfitParams - ESTIMATED_TOTAL_FEE;
+        // --- CÁLCULO DE FEES REALES (LA MAGIA) ---
+        // Necesitamos sumar los fees de los 3 trades.
+        // FeeManager.calculateTradingCost devuelve el costo en USD.
 
-        // --- LOG DE OPORTUNIDAD ---
-        if (netProfit > MIN_PROFIT_THRESHOLD) {
-            logger.warn("🚨 OPORTUNIDAD DETECTADA! [USDT->{}->{}->USDT] Neto: {}%",
-                    coinA, coinB, String.format("%.4f", netProfit * 100));
+        double cost1 = feeManager.calculateTradingCost("bybit_sub1", coinA + "USDT", capitalInicial);
+        double cost2 = feeManager.calculateTradingCost("bybit_sub1", pairA_B, capitalInicial); // Aprox valor sigue siendo $100
+        double cost3 = feeManager.calculateTradingCost("bybit_sub1", pairB_USDT, capitalInicial);
 
-            // Aquí en el futuro llamaremos a TradeExecutor.execute()
-        }
-        // Debug para ver que estamos vivos (opcional, quitar en prod)
-        else if (Math.random() < 0.01) { // Loguear solo el 1% de las veces para no saturar
-            logger.info("Monitoreando ciclo {}/{}... Spread: {}%", coinA, coinB, String.format("%.4f", grossProfitParams * 100));
+        double totalFees = cost1 + cost2 + cost3;
+        double netProfitUSD = grossProfitUSD - totalFees;
+        double netPercent = (netProfitUSD / capitalInicial) * 100.0;
+
+        // Logueamos el "Pulso" si es interesante
+        BotLogger.info(String.format("🔺 TRIÁNGULO [%s]: Bruto: %.3f%% | Fees: $%.2f | Neto: %.3f%%",
+                coinA, grossPercent, totalFees, netPercent));
+
+        // --- DISPARO ---
+        if (netPercent > MIN_NET_PROFIT) {
+            BotLogger.warn("🚀 OPORTUNIDAD TRIANGULAR REAL: " + coinA + " Neto: " + netPercent + "%");
+            executor.executeTriangular(coinA, coinB, 20.0); // Ejecutar con $20 reales
         }
     }
 }

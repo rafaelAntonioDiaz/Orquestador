@@ -9,6 +9,18 @@ java {
     }
 }
 
+tasks.withType(JavaCompile) {
+    options.release = 25
+    // 🔥 ESTA ES LA LLAVE DEL FERRARI:
+    options.compilerArgs.add("--enable-preview")
+}
+
+tasks.withType(Test) {
+    useJUnitPlatform()
+    // 🔥 TAMBIÉN NECESARIA PARA LOS TESTS:
+    jvmArgs("--enable-preview")
+}
+
 repositories {
     mavenCentral()
 }

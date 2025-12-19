@@ -85,7 +85,7 @@ public class BotLogger {
     }
 
     public static void sendTelegram(String message) {
-        // ... (Tu código existente) ...
+
         String token = System.getenv("TELEGRAM_BOT_TOKEN");
         String chatId = System.getenv("TELEGRAM_CHAT_ID");
 

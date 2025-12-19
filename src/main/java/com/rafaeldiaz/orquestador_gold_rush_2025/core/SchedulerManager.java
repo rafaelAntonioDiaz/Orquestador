@@ -77,12 +77,11 @@ public class SchedulerManager {
     private double getAndLogBalance(String exchangeId) {
         try {
             // ¡YA NO HAY DUMMIES! Llamada real a la API
-            double balance = connector.fetchBalance(exchangeId);
-            BotLogger.info(String.format("💰 Balance Check [%s]: $%.2f USDT", exchangeId, balance));
+            double balance = connector.fetchBalance(exchangeId, "USDT");            BotLogger.info(String.format("💰 Balance Check [%s]: $%.2f USDT", exchangeId, balance));
 
             if (balance < MIN_BALANCE_THRESHOLD) {
                 BotLogger.warn("⚠️ ALERTA: Saldo BAJO en " + exchangeId);
-                // BotLogger.sendTelegram("⚠️ Low Balance: " + exchangeId); // Descomentar en prod
+                BotLogger.sendTelegram("⚠️ Low Balance: " + exchangeId); // Descomentar en prod
             }
             return balance;
         } catch (IllegalArgumentException e) {

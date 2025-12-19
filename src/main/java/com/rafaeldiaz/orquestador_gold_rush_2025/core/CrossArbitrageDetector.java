@@ -1,61 +1,87 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025.core;
 
+import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
+
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Epic 4: Cerebro para Arbitraje entre Exchanges (Cross-Exchange).
- * Compara precios de compra en A vs precios de venta en B.
+ * Cerebro del Arbitraje Cross-Exchange.
+ * Compara precios entre exchanges, calcula costos REALES (Fees + Gas) y dispara.
  */
 public class CrossArbitrageDetector {
 
-    // Memoria de precios: Exchange -> Par -> Precio
-    // Ejemplo: prices.get("binance").get("BTCUSDT") = 50000.0
     private final Map<String, Map<String, Double>> priceCache = new ConcurrentHashMap<>();
+    private final CrossTradeExecutor executor;
+    private final FeeManager feeManager;
 
-    // Umbral mínimo de ganancia para considerar la oportunidad (0.8% para cubrir fees de retiro)
-    private static final double MIN_PROFIT_PERCENT = 0.8;
+    // Mínimo beneficio NETO deseado (después de pagar todos los fees)
+    private static final double MIN_NET_PROFIT_USD = 1.0;
 
-    /**
-     * Recibe actualización de precios y busca discrepancias inmediatas.
-     */
+    // Constructor Actualizado: Recibe el Conector para inicializar el FeeManager Vivo
+    public CrossArbitrageDetector(CrossTradeExecutor executor, ExchangeConnector connector) {
+        this.executor = executor;
+        this.feeManager = new FeeManager(connector); // Ahora sí se instancia correctamente
+    }
+
     public void onPriceUpdate(String exchange, String pair, double price) {
-        // 1. Guardar precio actual
         priceCache.computeIfAbsent(exchange, k -> new ConcurrentHashMap<>()).put(pair, price);
-
-        // 2. Comparar contra todos los otros exchanges conocidos
         checkOpportunities(exchange, pair, price);
     }
 
     private void checkOpportunities(String sourceExchange, String pair, double sourcePrice) {
-        // Iteramos sobre los otros exchanges en memoria
         for (String targetExchange : priceCache.keySet()) {
-            if (targetExchange.equals(sourceExchange)) continue; // No comparamos con nosotros mismos
+            if (targetExchange.equals(sourceExchange)) continue;
 
-            Double targetPrice = priceCache.get(targetExchange).get(pair);
-            if (targetPrice == null) continue; // No tenemos precio del otro lado aún
+            Map<String, Double> targetPrices = priceCache.get(targetExchange);
+            if (targetPrices == null) continue;
 
-            // ESCENARIO 1: Comprar en Source (Barato) -> Vender en Target (Caro)
-            calculateSpread(sourceExchange, targetExchange, pair, sourcePrice, targetPrice);
+            Double targetPrice = targetPrices.get(pair);
+            if (targetPrice == null) continue;
 
-            // ESCENARIO 2: Comprar en Target (Barato) -> Vender en Source (Caro)
-            calculateSpread(targetExchange, sourceExchange, pair, targetPrice, sourcePrice);
+            evaluateAndFire(sourceExchange, targetExchange, pair, sourcePrice, targetPrice);
+            evaluateAndFire(targetExchange, sourceExchange, pair, targetPrice, sourcePrice);
         }
     }
 
-    private void calculateSpread(String buyExchange, String sellExchange, String pair, double buyPrice, double sellPrice) {
-        // Fórmula de Profit: (Venta - Compra) / Compra
+    private void evaluateAndFire(String buyExchange, String sellExchange, String pair, double buyPrice, double sellPrice) {
         double rawDiff = sellPrice - buyPrice;
-        double profitPercent = (rawDiff / buyPrice) * 100.0;
+        if (rawDiff <= 0) return;
 
-        // Filtro de ruido: Solo nos interesan ganancias reales > 0.8%
-        if (profitPercent > MIN_PROFIT_PERCENT) {
-            String msg = String.format("🚨 CROSS-ARBITRAJE: Comprar %s en %s ($%.2f) -> Vender en %s ($%.2f) | Profit: %.3f%%",
-                    pair, buyExchange, buyPrice, sellExchange, sellPrice, profitPercent);
+        // Simulamos una operación con $100 USD para normalizar el cálculo y ver si es rentable
+        double tradeSize = 100.0;
+        double grossProfit = (rawDiff / buyPrice) * tradeSize; // Ganancia bruta en $
+        double grossPercent = (rawDiff / buyPrice) * 100.0;
 
-            BotLogger.info(msg);
-            // Aquí en el futuro llamaremos al TradeExecutor (Task 4.3)
+        // ¿Hay pulso de mercado? (Filtro preliminar: > 0.3% bruto)
+        if (grossPercent > 0.3) {
+
+            // 🔥 CÁLCULO DE COSTOS REALES (Trading + Retiro)
+            // Pasamos 'sourcePrice' para evitar una llamada HTTP extra de 400ms
+            // buyPrice es el precio actual del activo en el exchange de origen,
+            // perfecto para calcular cuánto valen esos satoshis de fee en USD.
+            double totalCost = feeManager.calculateCrossCost(buyExchange, sellExchange, pair, tradeSize, buyPrice);
+
+            double netProfit = grossProfit - totalCost;
+
+            String logMsg = String.format("👀 PULSO: %s->%s (%s) | Spread: %.2f%% ($%.2f) | Costo Total: $%.2f | Neto: $%.2f",
+                    buyExchange, sellExchange, pair, grossPercent, grossProfit, totalCost, netProfit);
+
+            BotLogger.info(logMsg);
+
+            // GATILLO FINAL: Solo si queda dinero limpio en la mesa ($1 USD)
+            if (netProfit > MIN_NET_PROFIT_USD) {
+                String fireMsg = "🚨 EJECUTANDO CROSS! Oportunidad Real Validada: " + logMsg;
+                BotLogger.warn(fireMsg);
+                BotLogger.sendTelegram(fireMsg);
+
+                // Ejecutamos la orden real
+                executor.executeCrossTrade(buyExchange, sellExchange, pair, buyPrice, sellPrice);
+
+                // Limpiamos caché de estos precios para evitar rebotes inmediatos
+                // (Opcional, depende de la estrategia de frecuencia)
+            }
         }
     }
 }

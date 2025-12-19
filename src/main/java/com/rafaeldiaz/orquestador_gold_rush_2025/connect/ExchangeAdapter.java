@@ -23,8 +23,7 @@ public interface ExchangeAdapter {
      * @param qty Cantidad a operar
      * @param price Precio límite (ignorar si es Market)
      */
-    Request buildOrderRequest(String pair, String side, String type, double qty, double price);
-
+    public abstract Request buildOrderRequest(String pair, String side, String type, double qty, double price);
     /**
      * Obtiene velas históricas (K-Lines) para análisis técnico (ATR).
      * @param pair Par (ej. BTCUSDT)
@@ -40,4 +39,6 @@ public interface ExchangeAdapter {
     String transferFunds(String fromAccountType, String toAccountType, double amount, String coin, String toMemberId);
 
     Request buildTransferRequest(String fromType, String toType, double amount, String coin, String toMemberId);
+
+
 }
