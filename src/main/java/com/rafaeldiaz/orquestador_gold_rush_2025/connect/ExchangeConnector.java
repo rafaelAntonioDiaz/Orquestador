@@ -44,12 +44,16 @@ public class ExchangeConnector {
     }
 
     private void initializeAdapters() {
+        // --- BYBIT SUBS (Core Trading) ---
         registerBybit("bybit_sub1", "BYBIT_SUB1_KEY", "BYBIT_SUB1_SECRET");
+        registerBybit("bybit_sub2", "BYBIT_SUB2_KEY", "BYBIT_SUB2_SECRET");
+        registerBybit("bybit_sub3", "BYBIT_SUB3_KEY", "BYBIT_SUB3_SECRET");
+
+        // --- CROSS EXCHANGES ---
         registerMexc("mexc", "MEXC_KEY", "MEXC_SECRET");
         registerBinance("binance", "BINANCE_KEY", "BINANCE_SECRET");
         registerKucoin("kucoin", "KUCOIN_KEY", "KUCOIN_SECRET", "KUCOIN_PASSPHRASE");
     }
-
     private void registerBybit(String id, String keyEnv, String secretEnv) {
         String key = envProvider.get(keyEnv);
         String secret = envProvider.get(secretEnv);
@@ -149,5 +153,15 @@ public class ExchangeConnector {
     public double[][] fetchCandles(String exchangeId, String pair, String interval, int limit) {
         // Delegamos directamente al adaptador porque la lógica de velas es compleja y específica
         return getAdapter(exchangeId).fetchCandles(pair, interval, limit);
+    }
+    /**
+     * Ejecuta transferencia interna.
+     * @param toMemberId UID de la cuenta destino (Requerido por Bybit)
+     */
+    public String transferFunds(String exchangeId, double amount, String toMemberId) throws IOException {
+        ExchangeAdapter adapter = getAdapter(exchangeId);
+        // Asumimos cuentas UNIFIED por defecto (Estándar 2025)
+        Request request = adapter.buildTransferRequest("UNIFIED", "UNIFIED", amount, "USDT", toMemberId);
+        return execute(request, json -> json.toString());
     }
 }

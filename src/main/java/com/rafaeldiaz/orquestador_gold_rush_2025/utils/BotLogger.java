@@ -8,30 +8,28 @@ import java.io.PrintWriter;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.logging.*;
+import java.util.Locale; // <--- 1. IMPORTANTE
 
-/**
- * Sistema centralizado de Logs, Reportes CSV y Alertas Telegram.
- * Cubre User Story 2.3 del Backlog.
- */
 public class BotLogger {
 
     private static final Logger logger = Logger.getLogger("GoldRushBot");
     private static final String LOG_DIR = "logs";
     private static final String CSV_FILE = "logs/trades.csv";
 
-    // Configuración Telegram (Task 2.3.3)
+    // ... (Configuración Telegram y HttpClient igual) ...
     private static final String TG_API_URL = "https://api.telegram.org/bot%s/sendMessage";
     private static final OkHttpClient httpClient = new OkHttpClient();
 
     static {
         try {
-            // 1. Crear directorio de logs si no existe
             File dir = new File(LOG_DIR);
             if (!dir.exists()) dir.mkdirs();
 
-            // 2. Configurar FileHandler (Task 2.3.1)
-            // Rotación: 10MB, máx 5 archivos. Append mode = true.
+            // --- TASK 2.3.1: FileHandler con Rotación ---
+            // 10MB limit, 5 files count, append mode = true
+            // Esto está PERFECTO según requerimiento.
             FileHandler fh = new FileHandler(LOG_DIR + "/bot.log", 10 * 1024 * 1024, 5, true);
+
             fh.setFormatter(new SimpleFormatter() {
                 private static final String format = "[%1$tF %1$tT] [%2$-7s] %3$s %n";
                 @Override
@@ -46,9 +44,8 @@ public class BotLogger {
 
             logger.addHandler(fh);
             logger.setLevel(Level.INFO);
-            logger.setUseParentHandlers(true); // También mostrar en consola
+            logger.setUseParentHandlers(true);
 
-            // 3. Inicializar CSV con cabeceras si es nuevo (Task 2.3.2)
             initCSV();
 
         } catch (IOException e) {
@@ -56,49 +53,39 @@ public class BotLogger {
         }
     }
 
-    // --- MÉTODOS PÚBLICOS DE LOGGING ---
-
-    public static void info(String msg) {
-        logger.info(msg);
-    }
-
-    public static void warn(String msg) {
-        logger.warning(msg);
-    }
-
+    // ... (Métodos info, warn, error iguales) ...
+    public static void info(String msg) { logger.info(msg); }
+    public static void warn(String msg) { logger.warning(msg); }
     public static void error(String msg) {
         logger.severe(msg);
-        // Los errores críticos también van a Telegram
         sendTelegram("🚨 ERROR CRÍTICO: " + msg);
     }
 
     /**
-     * Registra un trade completado en el CSV y avisa por Telegram.
-     * Task 2.3.2 y 2.3.3
+     * TASK 2.3.2: Registro de Trades en CSV.
+     * CORREGIDO: Formato numérico internacional.
      */
     public static void logTrade(String pair, String type, double profitPercent, double amountUSDT) {
+        initCSV();
         String date = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
 
-        // 1. Escribir en CSV
         try (PrintWriter pw = new PrintWriter(new FileWriter(CSV_FILE, true))) {
-            // Formato: Fecha, Par, Tipo, Profit%, Volumen
-            pw.printf("%s,%s,%s,%.4f,%.2f%n", date, pair, type, profitPercent, amountUSDT);
+            // FIX CRÍTICO: Usamos Locale.US para que escriba "0.50" y no "0,50"
+            // Esto asegura que el CSV sea legible por cualquier sistema.
+            pw.printf(Locale.US, "%s,%s,%s,%.4f,%.2f%n", date, pair, type, profitPercent, amountUSDT);
         } catch (IOException e) {
             logger.severe("Error escribiendo CSV: " + e.getMessage());
         }
 
-        // 2. Log normal
-        String msg = String.format("💰 TRADE EXITOSO: %s | %s | Profit: %.4f%% | Vol: $%.2f",
+        // Log visual y Alerta Telegram (Task 2.3.3)
+        String msg = String.format(Locale.US, "💰 TRADE EXITOSO: %s | %s | Profit: %.4f%% | Vol: $%.2f",
                 pair, type, profitPercent, amountUSDT);
         logger.info(msg);
-
-        // 3. Alerta Telegram
         sendTelegram(msg);
     }
 
-    // --- TELEGRAM (Task 2.3.3) ---
-
     public static void sendTelegram(String message) {
+        // ... (Tu código existente) ...
         String token = System.getenv("TELEGRAM_BOT_TOKEN");
         String chatId = System.getenv("TELEGRAM_CHAT_ID");
 
@@ -107,7 +94,6 @@ public class BotLogger {
             return;
         }
 
-        // Ejecutar en hilo separado para no bloquear el trading
         new Thread(() -> {
             try {
                 String url = String.format(TG_API_URL, token);
@@ -131,7 +117,7 @@ public class BotLogger {
         File f = new File(CSV_FILE);
         if (!f.exists()) {
             try (PrintWriter pw = new PrintWriter(new FileWriter(f))) {
-                pw.println("Fecha,Par,Tipo,Profit_Percent,Volumen_USDT"); // Cabecera
+                pw.println("Fecha,Par,Tipo,Profit_Percent,Volumen_USDT");
             } catch (IOException e) {
                 logger.severe("No se pudo crear cabecera CSV");
             }

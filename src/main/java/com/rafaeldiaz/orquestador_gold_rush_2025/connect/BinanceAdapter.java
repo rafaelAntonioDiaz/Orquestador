@@ -63,4 +63,14 @@ public class BinanceAdapter implements ExchangeAdapter {
     public double[][] fetchCandles(String pair, String interval, int limit) {
         return new double[0][0]; // TODO: Implementar en Epic 3.x
     }
+
+    @Override
+    public String transferFunds(String fromAccountType, String toAccountType, double amount, String coin, String toMemberId) {
+        return "";
+    }
+
+    @Override
+    public Request buildTransferRequest(String fromType, String toType, double amount, String coin, String toMemberId) {
+        return null;
+    }
 }

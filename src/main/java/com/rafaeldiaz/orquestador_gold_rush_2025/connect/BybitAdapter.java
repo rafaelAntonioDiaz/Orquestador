@@ -2,6 +2,7 @@ package com.rafaeldiaz.orquestador_gold_rush_2025.connect;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import okhttp3.*;
+import java.util.UUID;
 
 public class BybitAdapter implements ExchangeAdapter {
     private final String apiKey;
@@ -127,5 +128,75 @@ public class BybitAdapter implements ExchangeAdapter {
             throw new RuntimeException("Fallo al obtener velas Bybit", e);
         }
         return new double[0][0];
+    }
+
+    @Override
+    public String transferFunds(String fromAccountType, String toAccountType, double amount, String coin, String toMemberId) {
+        // Endpoint V5 para mover entre Main-Sub o Sub-Sub
+        String url = BASE_URL + "/v5/asset/transfer/universal-transfer";
+
+        long timestamp = System.currentTimeMillis();
+        String transferId = UUID.randomUUID().toString();
+
+        // Construimos JSON Body
+        // fromAccountType: "UNIFIED" (generalmente)
+        // toMemberId: El UID numérico de la subcuenta destino
+        String jsonBody = String.format(
+                "{\"transferId\":\"%s\",\"coin\":\"%s\",\"amount\":\"%s\",\"fromAccountType\":\"%s\",\"toAccountType\":\"%s\",\"toMemberId\":\"%s\"}",
+                transferId, coin, amount, fromAccountType, toAccountType, toMemberId
+        );
+
+        // Firma (POST)
+        String recvWindow = "5000";
+        String payloadToSign = timestamp + apiKey + recvWindow + jsonBody;
+        String signature = SignatureUtil.generateSignature(secret, payloadToSign);
+
+        RequestBody body = RequestBody.create(jsonBody, MediaType.parse("application/json"));
+
+        Request request = new Request.Builder()
+                .url(url)
+                .post(body)
+                .addHeader("X-BAPI-API-KEY", apiKey)
+                .addHeader("X-BAPI-SIGN", signature)
+                .addHeader("X-BAPI-TIMESTAMP", String.valueOf(timestamp))
+                .addHeader("X-BAPI-RECV-WINDOW", recvWindow)
+                .addHeader("Content-Type", "application/json")
+                .build();
+
+        // Ejecutamos aquí mismo (o delegamos al connector, pero el adapter construye)
+        // Por consistencia con tu arquitectura, el adapter construye el Request,
+        // pero como definimos que retorna String, vamos a permitir que el Connector ejecute.
+        // CORRECCIÓN ARQUITECTÓNICA:
+        // Tus otros métodos devuelven 'Request'. Cambiemos la interfaz para devolver 'Request'
+        // y que ExchangeConnector ejecute. Es más limpio.
+        return null; // Ver abajo corrección paso 1.1
+    }
+
+    // CORRECCIÓN: Implementa este método devolviendo Request
+    public Request buildTransferRequest(String fromType, String toType, double amount, String coin, String toMemberId) {
+        String url = BASE_URL + "/v5/asset/transfer/universal-transfer";
+        long timestamp = System.currentTimeMillis();
+        String transferId = UUID.randomUUID().toString();
+
+        String jsonBody = String.format(
+                "{\"transferId\":\"%s\",\"coin\":\"%s\",\"amount\":\"%s\",\"fromAccountType\":\"%s\",\"toAccountType\":\"%s\",\"toMemberId\":\"%s\"}",
+                transferId, coin, amount, fromType, toType, toMemberId
+        );
+
+        String recvWindow = "5000";
+        String payloadToSign = timestamp + apiKey + recvWindow + jsonBody;
+        String signature = SignatureUtil.generateSignature(secret, payloadToSign);
+
+        RequestBody body = RequestBody.create(jsonBody, MediaType.parse("application/json"));
+
+        return new Request.Builder()
+                .url(url)
+                .post(body)
+                .addHeader("X-BAPI-API-KEY", apiKey)
+                .addHeader("X-BAPI-SIGN", signature)
+                .addHeader("X-BAPI-TIMESTAMP", String.valueOf(timestamp))
+                .addHeader("X-BAPI-RECV-WINDOW", recvWindow)
+                .addHeader("Content-Type", "application/json")
+                .build();
     }
 }

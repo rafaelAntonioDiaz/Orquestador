@@ -33,4 +33,11 @@ public interface ExchangeAdapter {
      * @return Array de Arrays: [[High, Low, Close], [High, Low, Close]...]
      */
     double[][] fetchCandles(String pair, String interval, int limit);
+    /**
+     * Transfiere fondos entre cuentas (Rebalanceo - Task 2.4.2).
+     * @return ID de la transferencia o JSON de respuesta.
+     */
+    String transferFunds(String fromAccountType, String toAccountType, double amount, String coin, String toMemberId);
+
+    Request buildTransferRequest(String fromType, String toType, double amount, String coin, String toMemberId);
 }
