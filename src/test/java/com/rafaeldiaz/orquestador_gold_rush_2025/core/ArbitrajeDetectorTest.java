@@ -1,5 +1,6 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025.core;
 
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -39,5 +40,30 @@ class ArbitrageDetectorTest {
         // Ejecutamos el detector (debería imprimir el log de alerta en consola)
         System.out.println("--- Test Visual: Deberías ver una ALERTA abajo ---");
         detector.onPriceUpdate("bybit", "SOLBTC", 0.0019, 1000L);
+    }
+    @Test
+    @DisplayName("Benchmarking: Velocidad de Detección de Oportunidad")
+    void testDetectionSpeed() {
+        System.out.println("\n--- ⏱️ MIDIENDO REFLEJOS: CEREBRO DE ARBITRAJE ---");
+        ArbitrageDetector detector = new ArbitrageDetector();
+
+        // Preparamos el escenario (Cache con precios)
+        // Simulamos que ya recibió los datos del mercado
+        detector.onPriceUpdate("bybit", "BTCUSDT", 50000.0, System.currentTimeMillis());
+        detector.onPriceUpdate("bybit", "SOLUSDT", 100.0, System.currentTimeMillis());
+        detector.onPriceUpdate("bybit", "SOLBTC", 0.0019, System.currentTimeMillis()); // Precio desalineado
+
+        long start = System.nanoTime();
+
+        // Forzamos la evaluación (Simulamos la llegada del último precio que dispara el cálculo)
+        detector.onPriceUpdate("bybit", "SOLBTC", 0.0019, System.currentTimeMillis());
+
+        long end = System.nanoTime();
+        double durationMs = (end - start) / 1_000_000.0;
+
+        System.out.printf("🧠 Tiempo de Cálculo y Decisión: %.4f ms%n", durationMs);
+
+        // El cálculo matemático debería ser casi instantáneo (< 0.1ms)
+        assertTrue(durationMs < 5.0, "El cerebro debe reaccionar en menos de 5ms");
     }
 }

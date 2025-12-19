@@ -1,18 +1,23 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025.connect;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.rafaeldiaz.orquestador_gold_rush_2025.utils.SignatureUtil;
 import okhttp3.Request;
-
+import okhttp3.RequestBody;
+import okhttp3.MediaType;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.time.Instant;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class KucoinAdapter implements ExchangeAdapter {
     private final String apiKey;
     private final String secret;
     private final String passphrase; // Exclusivo de KuCoin
     private final String baseUrl;
+    private static final AtomicLong oidCounter = new AtomicLong(System.currentTimeMillis());
 
     public KucoinAdapter(String apiKey, String secret, String passphrase, String baseUrl) {
         this.apiKey = apiKey;
@@ -87,9 +92,60 @@ public class KucoinAdapter implements ExchangeAdapter {
     }
     @Override
     public Request buildOrderRequest(String pair, String side, String type, double qty, double price) {
-        // TODO: Implementar en Epic 4 (Cross Selectivo)
-        throw new UnsupportedOperationException("Trading no implementado aún para este exchange");
+        // KuCoin V2 Endpoint
+        String endpoint = "/api/v1/orders"; // Endpoint relativo para la firma
+        String url = baseUrl + endpoint;
+
+        long timestamp = Instant.now().toEpochMilli();
+
+        // 1. Passphrase Firmada (Header KC-API-PASSPHRASE)
+        // KuCoin pide: Base64(HmacSHA256(passphrase, secret))
+        String signedPassphrase = SignatureUtil.generateSignatureBase64(secret, passphrase);
+
+        // 2. Construcción del Body JSON
+        // KuCoin es estricto con el JSON.
+        String clientOid = Long.toHexString(oidCounter.getAndIncrement());
+
+        String sideLower = side.toLowerCase(); // KuCoin usa minúsculas (buy/sell)
+        String typeLower = type.toLowerCase(); // limit/market
+
+        StringBuilder json = new StringBuilder();
+        json.append("{")
+                .append("\"clientOid\":\"").append(clientOid).append("\",")
+                .append("\"side\":\"").append(sideLower).append("\",")
+                .append("\"symbol\":\"").append(pair).append("\",")
+                .append("\"type\":\"").append(typeLower).append("\",");
+
+        if (typeLower.equals("limit")) {
+            json.append("\"price\":\"").append(price).append("\",");
+            json.append("\"size\":\"").append(qty).append("\""); // KuCoin usa 'size' para cantidad base
+        } else {
+            // Market order: size (amount base) or funds (amount quote)
+            json.append("\"size\":\"").append(qty).append("\"");
+        }
+        json.append("}");
+
+        String jsonBodyString = json.toString();
+
+        // 3. Firma del Request (Header KC-API-SIGN)
+        // String to sign: timestamp + method + endpoint + body
+        String strToSign = timestamp + "POST" + endpoint + jsonBodyString;
+        String signature = SignatureUtil.generateSignatureBase64(secret, strToSign);
+
+        RequestBody body = RequestBody.create(jsonBodyString, MediaType.parse("application/json"));
+
+        return new Request.Builder()
+                .url(url)
+                .post(body)
+                .addHeader("KC-API-KEY", apiKey)
+                .addHeader("KC-API-SIGN", signature)
+                .addHeader("KC-API-TIMESTAMP", String.valueOf(timestamp))
+                .addHeader("KC-API-PASSPHRASE", signedPassphrase)
+                .addHeader("KC-API-KEY-VERSION", "2") // Importante para API V2
+                .addHeader("Content-Type", "application/json")
+                .build();
     }
+
     @Override
     public double[][] fetchCandles(String pair, String interval, int limit) {
         return new double[0][0]; // TODO: Implementar en Epic 3.x

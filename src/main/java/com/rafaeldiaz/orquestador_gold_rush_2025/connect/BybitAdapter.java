@@ -1,6 +1,7 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025.connect;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.rafaeldiaz.orquestador_gold_rush_2025.utils.SignatureUtil;
 import okhttp3.*;
 import java.util.UUID;
 

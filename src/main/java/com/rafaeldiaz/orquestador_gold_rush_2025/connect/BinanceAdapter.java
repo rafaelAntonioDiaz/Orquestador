@@ -1,7 +1,12 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025.connect;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.rafaeldiaz.orquestador_gold_rush_2025.utils.SignatureUtil;
 import okhttp3.Request;
+import okhttp3.MediaType;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import java.time.Instant;
 
 public class BinanceAdapter implements ExchangeAdapter {
     private final String apiKey;
@@ -54,11 +59,50 @@ public class BinanceAdapter implements ExchangeAdapter {
         }
         return 0.0;
     }
+
     @Override
     public Request buildOrderRequest(String pair, String side, String type, double qty, double price) {
-        // TODO: Implementar en Epic 4 (Cross Selectivo)
-        throw new UnsupportedOperationException("Trading no implementado aún para este exchange");
+        // Binance V3 Endpoint
+        String url = baseUrl + "/api/v3/order";
+        long timestamp = Instant.now().toEpochMilli();
+
+        String sideUpper = side.toUpperCase();
+        String typeUpper = type.toUpperCase();
+
+        StringBuilder query = new StringBuilder();
+        query.append("symbol=").append(pair);
+        query.append("&side=").append(sideUpper);
+        query.append("&type=").append(typeUpper);
+
+        // Binance también usa 'quantity' (Bybit usa 'qty')
+        query.append("&quantity=").append(qty);
+
+        if (typeUpper.equals("LIMIT")) {
+            query.append("&price=").append(price);
+            query.append("&timeInForce=GTC");
+        }
+
+        query.append("&timestamp=").append(timestamp);
+        // RecvWindow recomendado para evitar errores de sync
+        query.append("&recvWindow=5000");
+
+        // FIRMA (Usando tu nuevo y veloz SignatureUtil)
+        String signature = SignatureUtil.generateSignature(secret, query.toString());
+
+        // Binance envía todo en el Query String para POST
+        String finalUrl = url + "?" + query.toString() + "&signature=" + signature;
+
+        // Body vacío
+        RequestBody body = RequestBody.create("", MediaType.parse("application/x-www-form-urlencoded"));
+
+        return new Request.Builder()
+                .url(finalUrl)
+                .post(body)
+                .addHeader("X-MBX-APIKEY", apiKey) // <--- OJO: Header de Binance es diferente al de MEXC
+                .addHeader("Content-Type", "application/x-www-form-urlencoded")
+                .build();
     }
+
     @Override
     public double[][] fetchCandles(String pair, String interval, int limit) {
         return new double[0][0]; // TODO: Implementar en Epic 3.x
@@ -73,4 +117,5 @@ public class BinanceAdapter implements ExchangeAdapter {
     public Request buildTransferRequest(String fromType, String toType, double amount, String coin, String toMemberId) {
         return null;
     }
+
 }
