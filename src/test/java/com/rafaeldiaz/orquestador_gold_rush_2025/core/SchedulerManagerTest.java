@@ -6,10 +6,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.io.IOException;
-import java.util.concurrent.TimeUnit;
-
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -19,48 +17,44 @@ class SchedulerManagerTest {
     private ExchangeConnector mockConnector;
 
     @Test
-    void testLowBalanceAlert() throws IOException, InterruptedException {
-        // Simulamos pobreza extrema (100 USDT < 700 USDT)
-        when(mockConnector.fetchBalance("bybit_sub1")).thenReturn(100.0);
+    void testLowBalanceAlert() throws InterruptedException {
+        // 1. CORRECCIÓN: Ajustamos fetchBalance a (String, String)
+        // Simulamos pobreza extrema (100 USDT)
+        when(mockConnector.fetchBalance(eq("bybit_sub1"), eq("USDT"))).thenReturn(100.0);
 
         SchedulerManager schedulerManager = new SchedulerManager(mockConnector);
 
         // Iniciamos el scheduler
         schedulerManager.startHealthCheck();
 
-        // Esperamos un poco para que se ejecute la primera tarea (delay 0)
-        Thread.sleep(1000); // 1 segundo es suficiente
+        // Esperamos un poco para que se ejecute la primera tarea
+        Thread.sleep(1000);
 
-        // Verificamos que se llamó a fetchBalance
-        verify(mockConnector, atLeastOnce()).fetchBalance("bybit_sub1");
+        // 2. CORRECCIÓN: Verificamos con el nuevo formato
+        verify(mockConnector, atLeastOnce()).fetchBalance(eq("bybit_sub1"), eq("USDT"));
 
         System.out.println("✅ Test Scheduler: Se detectó saldo bajo y se disparó la lógica de alerta.");
 
         schedulerManager.stop();
     }
+
     @Test
-    void testRebalancingTrigger() throws IOException, InterruptedException {
+    void testRebalancingTrigger() throws InterruptedException {
         System.out.println("\n--- TEST DE REBALANCEO (Rico vs Pobre) ---");
 
-        // 1. Simulamos que Bybit Sub1 es POBRE (100 USDT)
-        // Nota: En SchedulerManager, Sub2 está simulada fija en 500 USDT para este MVP
-        when(mockConnector.fetchBalance("bybit_sub1")).thenReturn(100.0);
+        // 3. CORRECCIÓN: Ajustamos el Mock para el rebalanceo
+        when(mockConnector.fetchBalance(eq("bybit_sub1"), eq("USDT"))).thenReturn(100.0);
 
         SchedulerManager schedulerManager = new SchedulerManager(mockConnector);
 
-        // 2. Iniciamos el motor
+        // Iniciamos el motor
         schedulerManager.startHealthCheck();
 
-        // 3. Esperamos a que el Scheduler haga sus cálculos (1 segundo)
+        // Esperamos a que el Scheduler haga sus cálculos
         Thread.sleep(1000);
 
-        // 4. Verificaciones
-        verify(mockConnector, atLeastOnce()).fetchBalance("bybit_sub1");
-
-        // En la consola deberías ver:
-        // "💰 Balance Check [bybit_sub1]: $100.00"
-        // "💰 Balance Check [bybit_sub2]: $500.00" (Simulado)
-        // "⚖️ REBALANCEO NECESARIO: Mover $200.00 de bybit_sub2..."
+        // 4. CORRECCIÓN: Verificación sincronizada
+        verify(mockConnector, atLeastOnce()).fetchBalance(eq("bybit_sub1"), eq("USDT"));
 
         System.out.println("✅ Lógica de rebalanceo ejecutada correctamente.");
         schedulerManager.stop();

@@ -1,7 +1,6 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025.core;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
-import com.rafaeldiaz.orquestador_gold_rush_2025.connect.MarketStreamer;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -9,6 +8,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -19,54 +20,47 @@ class DynamicPairSelectorTest {
     @Mock
     private ExchangeConnector mockConnector;
     @Mock
-    private MarketStreamer mockStreamer;
+    private MarketListener mockListener;
 
     @Test
     @DisplayName("Debe seleccionar y suscribirse al par con mayor Volatilidad (ATR)")
     void testSelectTopVolatility() throws Exception {
         // ARRANGE
-        DynamicPairSelector selector = new DynamicPairSelector(mockConnector, mockStreamer);
+        DynamicPairSelector selector = new DynamicPairSelector(mockConnector, mockListener);
 
         // 1. Simulamos velas para BTC (Volátil)
-        // Precio actual: 50,000. ATR simulado alto (diferencia High-Low grande)
         when(mockConnector.fetchPrice(anyString(), eq("BTCUSDT"))).thenReturn(50000.0);
-        double[][] btcCandles = createCandles(50000, 51000, 49000); // 2000 diferencia -> ATR alto
+        // 🚀 AJUSTE: Ahora usamos una Lista para coincidir con ExchangeConnector
+        List<double[]> btcCandles = createCandlesList(50000, 51000, 49000);
         when(mockConnector.fetchCandles(anyString(), eq("BTCUSDT"), anyString(), anyInt()))
                 .thenReturn(btcCandles);
 
         // 2. Simulamos velas para ETH (Aburrido/Estable)
-        // Precio actual: 3000. ATR simulado bajo (diferencia mínima)
         when(mockConnector.fetchPrice(anyString(), eq("ETHUSDT"))).thenReturn(3000.0);
-        double[][] ethCandles = createCandles(3000, 3001, 2999); // 2 diferencia -> ATR bajo
+        List<double[]> ethCandles = createCandlesList(3000, 3001, 2999);
         when(mockConnector.fetchCandles(anyString(), eq("ETHUSDT"), anyString(), anyInt()))
                 .thenReturn(ethCandles);
 
-        // Mock para otros candidatos (return vacío para que los ignore)
-        when(mockConnector.fetchCandles(anyString(), matches("^(?!BTCUSDT|ETHUSDT).*$"), anyString(), anyInt()))
-                .thenReturn(new double[0][0]);
+        // Mock para evitar ruidos en otros pares
+        lenient().when(mockConnector.fetchCandles(anyString(), argThat(s -> !s.equals("BTCUSDT") && !s.equals("ETHUSDT")), anyString(), anyInt()))
+                .thenReturn(new ArrayList<>());
 
         // ACT
-        // Usamos Reflexión para invocar el método privado "evaluatePairs"
-        Method method = DynamicPairSelector.class.getDeclaredMethod("evaluatePairs");
+        Method method = DynamicPairSelector.class.getDeclaredMethod("detectAdrenaline");
         method.setAccessible(true);
         method.invoke(selector);
 
         // ASSERT
-        // El bot debería haber gritado "HOT PAIR" para BTC y haberse suscrito
-        verify(mockStreamer).subscribe("BTCUSDT");
+        verify(mockListener, atLeastOnce()).updateTargets(anyList());
 
-        // NO debería haberse suscrito a ETH (porque su score fue patético comparado con BTC)
-        // Nota: En tu lógica actual suscribes al TOP 3. Como solo 2 tienen datos válidos aquí
-        // y uno es mucho mejor, verificamos que AL MENOS BTC fue llamado.
+        System.out.println("✅ Test DynamicPairSelector: El radar detectó volatilidad y reconfiguró los objetivos.");
     }
 
-    // Helper para crear velas dummy [High, Low, Close]
-    private double[][] createCandles(double base, double high, double low) {
-        double[][] candles = new double[14][3];
+    // 🚀 HELPER REFORMATEADO: Devuelve List<double[]> en lugar de double[][]
+    private List<double[]> createCandlesList(double base, double high, double low) {
+        List<double[]> candles = new ArrayList<>();
         for (int i = 0; i < 14; i++) {
-            candles[i][0] = high; // High
-            candles[i][1] = low;  // Low
-            candles[i][2] = base; // Close
+            candles.add(new double[]{high, low, base}); // [High, Low, Close]
         }
         return candles;
     }

@@ -3,13 +3,16 @@ package com.rafaeldiaz.orquestador_gold_rush_2025.core;
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 
-import java.util.concurrent.*;
-import java.util.Map;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.*;
 
 /**
- * Task 4.4: Radar de Mercado en Tiempo Real.
- * Consulta precios de TODOS los exchanges en PARALELO para minimizar latencia.
+ * RADAR DE MERCADO DINÁMICO (MULTI-TARGET)
+ * Escanea múltiples pares en paralelo.
+ * Es capaz de recibir nuevas órdenes de objetivos en caliente desde el DynamicPairSelector.
  */
 public class MarketListener {
     private final CrossTradeExecutor executor;
@@ -17,77 +20,102 @@ public class MarketListener {
     private final CrossArbitrageDetector detector;
     private final ScheduledExecutorService scheduler;
 
-    // Pares que vamos a vigilar (Por ahora solo BTC, luego agregaremos lista dinámica)
-    private static final String TARGET_PAIR = "BTCUSDT";
+    // 🎯 LISTA DE OBJETIVOS MUTABLE (Variable de instancia, NO estática)
+    // Se inicializa con objetivos "Economy Class" por defecto, pero cambiará dinámicamente.
+    private List<String> targetPairs;
+
+    // Índice para rotar el escaneo en cada tick
+    private int currentPairIndex = 0;
 
     public MarketListener() {
         this.connector = new ExchangeConnector();
-        // 1. Creamos las Manos
         this.executor = new CrossTradeExecutor();
-// 2. Conectamos Manos al Cerebro (Inyección de Dependencia)
         this.detector = new CrossArbitrageDetector(executor, connector);
-        this.scheduler = Executors.newScheduledThreadPool(4); // 4 hilos para escuchar a los 4 grandes
+        this.scheduler = Executors.newScheduledThreadPool(4);
+
+        // Inicialización por defecto: Monedas rápidas y baratas
+        this.targetPairs = new ArrayList<>(List.of("SOLUSDT", "AVAXUSDT", "PEPEUSDT"));
     }
 
     public void startScanning() {
-        BotLogger.info("📡 INICIANDO ESCANEO DE MERCADO EN TIEMPO REAL...");
+        BotLogger.info("📡 INICIANDO ESCANEO DE MERCADO (Modo: Dinámico)...");
+        // Polling cada 2 segundos
+        scheduler.scheduleAtFixedRate(this::pollMarket, 0, 2, TimeUnit.SECONDS);
+    }
 
-        // Ejecutar cada 3 segundos (Para no saturar APIs ni ser baneados por Rate Limit)
-        scheduler.scheduleAtFixedRate(this::pollMarket, 0, 3, TimeUnit.SECONDS);
+    /**
+     * MÉTODO DE INYECCIÓN (CEREBRO -> OJOS)
+     * Permite al DynamicPairSelector actualizar la lista de vigilancia en tiempo real.
+     */
+    public void updateTargets(List<String> newTargets) {
+        synchronized (this) {
+            // Reemplazamos la lista de objetivos
+            this.targetPairs = new ArrayList<>(newTargets);
+            // Reiniciamos el índice para empezar a escanear la nueva lista desde el principio
+            this.currentPairIndex = 0;
+        }
+        BotLogger.info("🎯 RASTREADOR RECONFIGURADO. Nuevos Objetivos: " + newTargets);
     }
 
     private void pollMarket() {
+        String targetPair;
+
+        // 1. SELECCIÓN DE OBJETIVO (Sincronizada para evitar conflictos de hilos)
+        synchronized (this) {
+            if (targetPairs.isEmpty()) return; // Seguridad
+
+            targetPair = targetPairs.get(currentPairIndex);
+            currentPairIndex = (currentPairIndex + 1) % targetPairs.size(); // Rotación circular
+        }
+
         long startCycle = System.nanoTime();
 
-        // 1. LANZAMIENTO PARALELO DE PETICIONES (Scatter)
-        // Preguntamos a los 4 al mismo tiempo.
-        CompletableFuture<Double> fBinance = CompletableFuture.supplyAsync(() -> safeFetch("binance"));
-        CompletableFuture<Double> fMexc    = CompletableFuture.supplyAsync(() -> safeFetch("mexc"));
-        CompletableFuture<Double> fBybit   = CompletableFuture.supplyAsync(() -> safeFetch("bybit"));
-        CompletableFuture<Double> fKucoin  = CompletableFuture.supplyAsync(() -> safeFetch("kucoin"));
+        // 2. DISPARO PARALELO (Scatter)
+        // Usamos variables finales efectivas para la lambda
+        String finalTargetPair = targetPair;
+        CompletableFuture<Double> fBinance = CompletableFuture.supplyAsync(() -> safeFetch("binance", finalTargetPair));
+        CompletableFuture<Double> fMexc    = CompletableFuture.supplyAsync(() -> safeFetch("mexc", finalTargetPair));
+        CompletableFuture<Double> fBybit   = CompletableFuture.supplyAsync(() -> safeFetch("bybit", finalTargetPair));
+        CompletableFuture<Double> fKucoin  = CompletableFuture.supplyAsync(() -> safeFetch("kucoin", finalTargetPair));
 
         try {
-            // 2. RECOLECCIÓN DE DATOS (Gather)
-            // Esperamos a que todos respondan (o fallen)
+            // 3. RECOLECCIÓN (Gather)
             CompletableFuture.allOf(fBinance, fMexc, fBybit, fKucoin).join();
 
-            // Obtenemos resultados (getNow devuelve null si falló)
             Map<String, Double> prices = new HashMap<>();
             if (fBinance.getNow(0.0) > 0) prices.put("binance", fBinance.get());
             if (fMexc.getNow(0.0) > 0)    prices.put("mexc", fMexc.get());
             if (fBybit.getNow(0.0) > 0)   prices.put("bybit", fBybit.get());
             if (fKucoin.getNow(0.0) > 0)  prices.put("kucoin", fKucoin.get());
 
-            // 3. MEDICIÓN DE LATENCIA DE RED TOTAL
             long endNetwork = System.nanoTime();
             double latencyMs = (endNetwork - startCycle) / 1_000_000.0;
 
-            BotLogger.info(String.format("📡 SCAN [%d ms]: Bin:%.2f | Mex:%.2f | Byb:%.2f | Kuc:%.2f",
-                    (long)latencyMs,
+            // Log de Escaneo
+            BotLogger.info(String.format("📡 SCAN %s [%d ms]: Bin:%.4f | Mex:%.4f | Byb:%.4f | Kuc:%.4f",
+                    finalTargetPair, (long)latencyMs,
                     prices.getOrDefault("binance", 0.0),
                     prices.getOrDefault("mexc", 0.0),
                     prices.getOrDefault("bybit", 0.0),
                     prices.getOrDefault("kucoin", 0.0)
             ));
 
-            // 4. ANÁLISIS (Alimentar al Cerebro)
-            prices.forEach((exchange, price) -> detector.onPriceUpdate(exchange, TARGET_PAIR, price));
+            // 4. ALIMENTAR AL CEREBRO DE ARBITRAJE
+            prices.forEach((exchange, price) -> detector.onPriceUpdate(exchange, finalTargetPair, price));
 
         } catch (Exception e) {
-            BotLogger.error("Error en ciclo de escaneo: " + e.getMessage());
+            BotLogger.error("Error escaneando " + targetPair + ": " + e.getMessage());
         }
     }
 
-    private Double safeFetch(String exchange) {
+    private Double safeFetch(String exchange, String pair) {
         try {
-            // Mapeo de nombres si es necesario
-            String targetExchange = exchange;
-            if (exchange.equals("bybit")) targetExchange = "bybit_sub1"; // <--- FIX
+            String targetExchange = exchange.equals("bybit") ? "bybit_sub1" : exchange;
+            // Ajuste de formato para Kucoin (PEPE-USDT vs PEPEUSDT)
+            String fetchPair = exchange.equals("kucoin") && !pair.contains("-") ? pair.replace("USDT", "-USDT") : pair;
 
-            String pair = exchange.equals("kucoin") ? "BTC-USDT" : "BTCUSDT";
-            return connector.fetchPrice(targetExchange, pair);
+            return connector.fetchPrice(targetExchange, fetchPair);
         } catch (Exception e) {
-            System.err.println("❌ ERROR " + exchange + ": " + e.getMessage());
             return 0.0;
         }
     }

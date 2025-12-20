@@ -34,7 +34,6 @@ public class TradeExecutor {
         BotLogger.info(String.format("⚡ INICIANDO TRIANGULACIÓN: USDT -> %s -> %s -> USDT", coinA, coinB));
 
         // 1. VALIDACIÓN DE SALDO INICIAL
-        // 🔥 AQUÍ ESTABA EL ERROR: Ahora pedimos explícitamente el saldo de "USDT"
         double balanceUSDT = connector.fetchBalance(EXCHANGE, "USDT");
 
         if (!dryRun) {
@@ -72,38 +71,32 @@ public class TradeExecutor {
 
 
         // =====================================================================
-        // 🏁 FASE 2: COIN A -> COIN B
+        // 🏁 FASE 2: COIN A -> COIN B (Blindada)
         // =====================================================================
-        // Aquí se complica. Depende del par disponible.
-        // Escenario común: Existe pairB_pairA (ej. SOLBTC) -> Base SOL, Quote BTC.
-        // Nosotros tenemos BTC (Quote), queremos SOL (Base). => COMPRAMOS SOL.
-
         String pair2 = coinB + coinA; // Ej. SOLBTC
-        // Verificamos si existe precio, si no, intentamos al revés (A/B)
         double price2 = connector.fetchPrice(EXCHANGE, pair2);
 
         String order2 = null;
         double qtyB = 0.0;
 
         if (price2 > 0) {
-            // Caso Normal: SOLBTC existe. Compramos SOL pagando con BTC.
-            // Cuantos SOL compro con mis BTC?
-            // qtyBTC disponible ~= qtyA (menos fees).
-            // qtySOL = qtyBTC / price2
-            double currentQtyA = connector.fetchBalance(EXCHANGE, coinA); // Verificamos saldo real post-fee
+            double currentQtyA = connector.fetchBalance(EXCHANGE, coinA);
             qtyB = currentQtyA / price2;
-            qtyB = Math.floor(qtyB * 10000) / 10000.0; // 4 decimales
+            qtyB = Math.floor(qtyB * 10000) / 10000.0;
 
             order2 = connector.placeOrder(EXCHANGE, pair2, "BUY", "MARKET", qtyB, 0);
         } else {
-            // Caso Inverso: Existe BTCSOL? (Raro en CEX, común en DEX).
-            // Si el par es al revés, tendríamos que VENDER A para obtener B.
-            BotLogger.error("❌ Par intermedio no encontrado o no soportado: " + pair2);
-            return; // Abortamos estrategia por seguridad
+            BotLogger.error("❌ Par intermedio no encontrado: " + pair2);
+            // 🚀 REVERSIÓN: Si falla el par, vendemos A para volver a USDT
+            connector.placeOrder(EXCHANGE, pair1, "SELL", "MARKET", qtyA, 0);
+            BotLogger.info("⚠️ REVERSIÓN EJECUTADA: Volviendo a USDT para proteger capital.");
+            return;
         }
 
         if (order2 == null) {
-            BotLogger.error("❌ Falló Paso 2 (Swap " + coinA + "->" + coinB + "). Quedamos en " + coinA);
+            BotLogger.error("❌ Falló Paso 2. Intentando recuperar USDT...");
+            // 🚀 REVERSIÓN: Si la orden falla, vendemos A
+            connector.placeOrder(EXCHANGE, pair1, "SELL", "MARKET", qtyA, 0);
             return;
         }
         BotLogger.info("✅ Paso 2 Completado: Obtenido " + qtyB + " " + coinB);

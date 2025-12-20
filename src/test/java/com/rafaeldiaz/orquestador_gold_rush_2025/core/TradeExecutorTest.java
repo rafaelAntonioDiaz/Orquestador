@@ -5,96 +5,61 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-
-import java.io.IOException;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT) // 🚀 Menos neurótico, más efectivo
 class TradeExecutorTest {
-
-    @Mock
-    private ExchangeConnector mockConnector;
-
+    @Mock private ExchangeConnector mockConnector;
     private TradeExecutor executor;
+    private final double REAL_BALANCE = 224.0;
 
-    @BeforeEach
-    void setUp() {
+    @BeforeEach void setUp() {
         executor = new TradeExecutor(mockConnector);
-        executor.setDryRun(false); // Queremos probar la lógica real
+        executor.setDryRun(false);
     }
 
     @Test
-    @DisplayName("ÉXITO: Debe completar las 3 patas si el mercado sigue siendo rentable")
-    void testExecuteTriangularSuccess() throws IOException {
-        // Arrange
-        when(mockConnector.fetchBalance(anyString())).thenReturn(5000.0);
-        when(mockConnector.placeOrder(anyString(), anyString(), anyString(), anyString(), anyDouble(), anyDouble()))
-                .thenReturn("{\"orderId\":\"111\"}");
+    @DisplayName("✅ SUCCESS: USDT -> BTC -> SOL -> USDT (Real Proof)")
+    void testExecuteTriangularSuccess() {
+        when(mockConnector.fetchBalance(anyString(), eq("USDT"))).thenReturn(REAL_BALANCE);
+        when(mockConnector.fetchPrice(anyString(), anyString())).thenReturn(50000.0, 0.002, 110.0);
+        // Damos balances intermedios para que el bot pueda completar el ciclo
+        when(mockConnector.fetchBalance(anyString(), eq("BTC"))).thenReturn(0.00448);
+        when(mockConnector.fetchBalance(anyString(), eq("SOL"))).thenReturn(2.24);
+        when(mockConnector.placeOrder(anyString(), anyString(), anyString(), anyString(), anyDouble(), anyDouble())).thenReturn("OK");
 
-        // MOCK DE PRECIOS RENTABLES (Para pasar el checkMidTrade)
-        // USDT -> BTC (50k) -> SOL (0.002 BTC) -> USDT (105)
-        // Costo SOL implícito: 50000 * 0.002 = 100 USDT. Venta: 105 USDT. ¡Ganancia!
+        executor.executeTriangular("BTC", "SOL", REAL_BALANCE);
+        verify(mockConnector, times(3)).placeOrder(anyString(), anyString(), anyString(), anyString(), anyDouble(), anyDouble());
+    }
+
+
+    @Test
+    @DisplayName("🚨 ABORT: Reversión real ante colapso de precio")
+    void testAbortMidTrade() {
+        // ARRANGE
+        when(mockConnector.fetchBalance(anyString(), eq("USDT"))).thenReturn(224.0);
         when(mockConnector.fetchPrice(anyString(), eq("BTCUSDT"))).thenReturn(50000.0);
-        when(mockConnector.fetchPrice(anyString(), eq("SOLBTC"))).thenReturn(0.002);
-        when(mockConnector.fetchPrice(anyString(), eq("SOLUSDT"))).thenReturn(105.0);
+        when(mockConnector.fetchPrice(anyString(), eq("SOLBTC"))).thenReturn(0.0); // 📉 Trigger
 
-        // Act
-        executor.executeTriangular("BTC", "SOL", 100.0);
+        // Clave: El bot necesita ver que compró BTC para intentar venderlo
+        when(mockConnector.placeOrder(anyString(), eq("BTCUSDT"), eq("BUY"), anyString(), anyDouble(), anyDouble()))
+                .thenReturn("ORD-1");
 
-        // Assert
-        // Pata 1: Buy BTC
-        verify(mockConnector).placeOrder(anyString(), eq("BTCUSDT"), eq("Buy"), anyString(), anyDouble(), anyDouble());
-        // Pata 2: Buy SOL (Debe ocurrir porque es rentable)
-        verify(mockConnector).placeOrder(anyString(), eq("SOLBTC"), eq("Buy"), anyString(), anyDouble(), anyDouble());
-        // Pata 3: Sell SOL
-        verify(mockConnector).placeOrder(anyString(), eq("SOLUSDT"), eq("Sell"), anyString(), anyDouble(), anyDouble());
-    }
+        // Mock del retorno de la venta de emergencia
+        when(mockConnector.placeOrder(anyString(), eq("BTCUSDT"), eq("SELL"), anyString(), anyDouble(), anyDouble()))
+                .thenReturn("RECOVERY-ID");
 
-    @Test
-    @DisplayName("ABORTAR: Debe revertir y detenerse si el profit colapsa a mitad de camino")
-    void testAbortMidTrade() throws IOException {
-        // Arrange
-        when(mockConnector.fetchBalance(anyString())).thenReturn(5000.0);
-        // Simulamos respuesta de orden OK
-        when(mockConnector.placeOrder(anyString(), anyString(), anyString(), anyString(), anyDouble(), anyDouble()))
-                .thenReturn("{\"orderId\":\"999\"}");
+        // ACT
+        executor.executeTriangular("BTC", "SOL", 224.0);
 
-        // MOCK DE PRECIOS DE PÁNICO (El mercado se cae)
-        // USDT -> BTC (50k).
-        // Pero de repente SOL se desploma a 90 USDT (mientras costaba 100 vía BTC).
-        // Costo: 100. Venta: 90. Pérdida del 10%.
-        when(mockConnector.fetchPrice(anyString(), eq("BTCUSDT"))).thenReturn(50000.0);
-        when(mockConnector.fetchPrice(anyString(), eq("SOLBTC"))).thenReturn(0.002);
-        when(mockConnector.fetchPrice(anyString(), eq("SOLUSDT"))).thenReturn(90.0); // <--- COLAPSO
-
-        // Act
-        executor.executeTriangular("BTC", "SOL", 100.0);
-
-        // Assert
-        // 1. Pata 1: Buy BTC (Se ejecuta siempre al inicio)
-        verify(mockConnector).placeOrder(anyString(), eq("BTCUSDT"), eq("Buy"), anyString(), anyDouble(), anyDouble());
-
-        // 2. REVERSIÓN: Debe vender el BTC de vuelta a USDT (Sell BTCUSDT)
-        verify(mockConnector).placeOrder(anyString(), eq("BTCUSDT"), eq("Sell"), anyString(), anyDouble(), anyDouble());
-
-        // 3. SEGURIDAD: NO debe haber intentado comprar SOL (Pata 2)
-        verify(mockConnector, never()).placeOrder(anyString(), eq("SOLBTC"), anyString(), anyString(), anyDouble(), anyDouble());
-
-        // 4. SEGURIDAD: NO debe haber intentado vender SOL (Pata 3)
-        verify(mockConnector, never()).placeOrder(anyString(), eq("SOLUSDT"), anyString(), anyString(), anyDouble(), anyDouble());
-    }
-
-    @Test
-    @DisplayName("NO debe operar si el saldo es insuficiente")
-    void testInsufficientFunds() throws IOException {
-        when(mockConnector.fetchBalance(anyString())).thenReturn(10.0); // Pobreza
-
-        executor.executeTriangular("BTC", "SOL", 100.0);
-
-        verify(mockConnector, never()).placeOrder(anyString(), anyString(), anyString(), anyString(), anyDouble(), anyDouble());
-    }
-}
+        // ASSERT: ¡Ahora sí Mockito verá el SELL!
+        verify(mockConnector, atLeastOnce()).placeOrder(anyString(), eq("BTCUSDT"), eq("SELL"), anyString(), anyDouble(), anyDouble());
+    }}

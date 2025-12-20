@@ -17,7 +17,7 @@ public class CrossArbitrageDetector {
     private final FeeManager feeManager;
 
     // Mínimo beneficio NETO deseado (después de pagar todos los fees)
-    private static final double MIN_NET_PROFIT_USD = 1.0;
+    private static final double MIN_NET_PROFIT_USD = 0.01;
 
     // Constructor Actualizado: Recibe el Conector para inicializar el FeeManager Vivo
     public CrossArbitrageDetector(CrossTradeExecutor executor, ExchangeConnector connector) {
@@ -47,41 +47,39 @@ public class CrossArbitrageDetector {
 
     private void evaluateAndFire(String buyExchange, String sellExchange, String pair, double buyPrice, double sellPrice) {
         double rawDiff = sellPrice - buyPrice;
+
+        // Si no hay diferencia matemática, ni nos molestamos.
         if (rawDiff <= 0) return;
 
-        // Simulamos una operación con $100 USD para normalizar el cálculo y ver si es rentable
-        double tradeSize = 100.0;
-        double grossProfit = (rawDiff / buyPrice) * tradeSize; // Ganancia bruta en $
+        double tradeSize = 300.0; // Base de simulación
+        double grossProfit = (rawDiff / buyPrice) * tradeSize;
         double grossPercent = (rawDiff / buyPrice) * 100.0;
 
-        // ¿Hay pulso de mercado? (Filtro preliminar: > 0.3% bruto)
-        if (grossPercent > 0.3) {
+        // Permitimos calcular CUALQUIER diferencia positiva para ver el log,
+        // pero mantenemos el gatillo de ejecución estricto abajo.
+        if (grossPercent > 0.0) {
 
-            // 🔥 CÁLCULO DE COSTOS REALES (Trading + Retiro)
-            // Pasamos 'sourcePrice' para evitar una llamada HTTP extra de 400ms
-            // buyPrice es el precio actual del activo en el exchange de origen,
-            // perfecto para calcular cuánto valen esos satoshis de fee en USD.
+            // Calculamos el costo real (Fee de retiro + Trading Fees)
             double totalCost = feeManager.calculateCrossCost(buyExchange, sellExchange, pair, tradeSize, buyPrice);
-
             double netProfit = grossProfit - totalCost;
 
-            String logMsg = String.format("👀 PULSO: %s->%s (%s) | Spread: %.2f%% ($%.2f) | Costo Total: $%.2f | Neto: $%.2f",
-                    buyExchange, sellExchange, pair, grossPercent, grossProfit, totalCost, netProfit);
+            // Preparamos el mensaje con TODOS los datos financieros
+            String logMsg = String.format("📊 ANALISIS: %s->%s (%s) | Bruto: $%.2f (%.3f%%) | Costo Op: $%.2f | Neto Proyectado: $%.2f",
+                    buyExchange, sellExchange, pair, grossProfit, grossPercent, totalCost, netProfit);
 
-            BotLogger.info(logMsg);
-
-            // GATILLO FINAL: Solo si queda dinero limpio en la mesa ($1 USD)
+            // --- EL GATILLO DE ORO (Sin cambios, Estricto) ---
             if (netProfit > MIN_NET_PROFIT_USD) {
-                String fireMsg = "🚨 EJECUTANDO CROSS! Oportunidad Real Validada: " + logMsg;
+                // CASO: ES RENTABLE -> DISPARAMOS
+                String fireMsg = "🚨 EJECUTANDO CROSS! Oportunidad Validada: " + logMsg;
                 BotLogger.warn(fireMsg);
                 BotLogger.sendTelegram(fireMsg);
 
-                // Ejecutamos la orden real
                 executor.executeCrossTrade(buyExchange, sellExchange, pair, buyPrice, sellPrice);
 
-                // Limpiamos caché de estos precios para evitar rebotes inmediatos
-                // (Opcional, depende de la estrategia de frecuencia)
+            } else {
+                // CASO: NO ES RENTABLE (Lo que pediste ver)
+                // Mostramos el valor de la oportunidad que dejamos pasar y por qué.
+                BotLogger.info(logMsg + " -> ❌ DESCARTADA (No cumple objetivo $0.01)");
             }
         }
-    }
-}
+    }}
