@@ -1,59 +1,54 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025.utils;
 
+import io.github.cdimascio.dotenv.Dotenv;
 import okhttp3.*;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.logging.*;
-import java.util.Locale; // <--- 1. IMPORTANTE
+import java.util.Locale;
 
 public class BotLogger {
 
     private static final Logger logger = Logger.getLogger("GoldRushBot");
     private static final String LOG_DIR = "logs";
     private static final String CSV_FILE = "logs/trades.csv";
-
-    // ... (Configuración Telegram y HttpClient igual) ...
-    private static final String TG_API_URL = "https://api.telegram.org/bot%s/sendMessage";
     private static final OkHttpClient httpClient = new OkHttpClient();
+
+    // 🚀 MEJORA: Ruta absoluta garantizada para encontrar el .env
+    private static final Dotenv dotenv = Dotenv.configure()
+            .directory(System.getProperty("user.dir"))
+            .ignoreIfMissing()
+            .load();
+
+    private static final String TOKEN = dotenv.get("TELEGRAM_BOT_TOKEN");
+    private static final String CHAT_ID = dotenv.get("TELEGRAM_CHAT_ID");
 
     static {
         try {
             File dir = new File(LOG_DIR);
             if (!dir.exists()) dir.mkdirs();
-
-            // --- TASK 2.3.1: FileHandler con Rotación ---
-            // 10MB limit, 5 files count, append mode = true
-            // Esto está PERFECTO según requerimiento.
             FileHandler fh = new FileHandler(LOG_DIR + "/bot.log", 10 * 1024 * 1024, 5, true);
-
             fh.setFormatter(new SimpleFormatter() {
                 private static final String format = "[%1$tF %1$tT] [%2$-7s] %3$s %n";
                 @Override
                 public synchronized String format(LogRecord lr) {
-                    return String.format(format,
-                            new java.util.Date(lr.getMillis()),
-                            lr.getLevel().getLocalizedName(),
-                            lr.getMessage()
-                    );
+                    return String.format(format, new java.util.Date(lr.getMillis()), lr.getLevel().getLocalizedName(), lr.getMessage());
                 }
             });
-
             logger.addHandler(fh);
             logger.setLevel(Level.INFO);
             logger.setUseParentHandlers(true);
-
             initCSV();
-
         } catch (IOException e) {
             System.err.println("FATAL: No se pudo iniciar el sistema de logs: " + e.getMessage());
         }
     }
 
-    // ... (Métodos info, warn, error iguales) ...
     public static void info(String msg) { logger.info(msg); }
     public static void warn(String msg) { logger.warning(msg); }
     public static void error(String msg) {
@@ -61,56 +56,52 @@ public class BotLogger {
         sendTelegram("🚨 ERROR CRÍTICO: " + msg);
     }
 
-    /**
-     * TASK 2.3.2: Registro de Trades en CSV.
-     * CORREGIDO: Formato numérico internacional.
-     */
     public static void logTrade(String pair, String type, double profitPercent, double amountUSDT) {
         initCSV();
         String date = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
-
         try (PrintWriter pw = new PrintWriter(new FileWriter(CSV_FILE, true))) {
-            // FIX CRÍTICO: Usamos Locale.US para que escriba "0.50" y no "0,50"
-            // Esto asegura que el CSV sea legible por cualquier sistema.
             pw.printf(Locale.US, "%s,%s,%s,%.4f,%.2f%n", date, pair, type, profitPercent, amountUSDT);
         } catch (IOException e) {
             logger.severe("Error escribiendo CSV: " + e.getMessage());
         }
-
-        // Log visual y Alerta Telegram (Task 2.3.3)
-        String msg = String.format(Locale.US, "💰 TRADE EXITOSO: %s | %s | Profit: %.4f%% | Vol: $%.2f",
-                pair, type, profitPercent, amountUSDT);
+        String msg = String.format(Locale.US, "💰 TRADE EXITOSO: %s | %s | Profit: %.4f%% | Vol: $%.2f", pair, type, profitPercent, amountUSDT);
         logger.info(msg);
         sendTelegram(msg);
     }
 
     public static void sendTelegram(String message) {
-
-        String token = System.getenv("TELEGRAM_BOT_TOKEN");
-        String chatId = System.getenv("TELEGRAM_CHAT_ID");
-
-        if (token == null || chatId == null) {
-            logger.warning("Telegram no configurado (Faltan env vars). Mensaje no enviado.");
+        // 1. Doble chequeo de existencia de llaves
+        if (TOKEN == null || TOKEN.isBlank() || CHAT_ID == null || CHAT_ID.isBlank()) {
+            System.err.println("❌ RADIO FUERA DE SERVICIO: Verifica el archivo .env en " + System.getProperty("user.dir"));
             return;
         }
 
-        new Thread(() -> {
+        // 🏎️ Motor Java 25: Hilo Virtual para comunicaciones asíncronas
+        Thread.ofVirtual().start(() -> {
             try {
-                String url = String.format(TG_API_URL, token);
-                String jsonBody = String.format("{\"chat_id\": \"%s\", \"text\": \"%s\"}", chatId, message);
+                // 🛡️ LIMPIEZA QUIRÚRGICA: Eliminamos cualquier basura del token
+                String cleanToken = TOKEN.trim().replaceAll("[\"']", "");
+                String cleanChatId = CHAT_ID.trim().replaceAll("[\"']", "");
 
-                RequestBody body = RequestBody.create(jsonBody, MediaType.parse("application/json"));
+                String url = "https://api.telegram.org/bot" + cleanToken + "/sendMessage";
+                String jsonBody = String.format("{\"chat_id\": \"%s\", \"text\": \"%s\"}", cleanChatId, message);
+
+                RequestBody body = RequestBody.create(jsonBody, MediaType.parse("application/json; charset=utf-8"));
                 Request request = new Request.Builder().url(url).post(body).build();
 
                 try (Response response = httpClient.newCall(request).execute()) {
-                    if (!response.isSuccessful()) {
-                        System.err.println("Error enviando Telegram: " + response.code());
+                    if (response.isSuccessful()) {
+                        System.out.println("📡 [RADIO]: Mensaje transmitido con éxito.");
+                    } else {
+                        // Si falla, queremos ver el JSON de Telegram para saber por qué
+                        String errorBody = response.body() != null ? response.body().string() : "Sin respuesta";
+                        System.err.println("❌ Radio Error (HTTP " + response.code() + "): " + errorBody);
                     }
                 }
             } catch (Exception e) {
-                System.err.println("Fallo al enviar Telegram: " + e.getMessage());
+                System.err.println("❌ Fallo físico de antena: " + e.getMessage());
             }
-        }).start();
+        });
     }
 
     private static void initCSV() {

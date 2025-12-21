@@ -14,21 +14,27 @@ public class RealConnectivityTest {
     private static final String ASSET = "USDT";
 
     @Test
-    @DisplayName("✅ BYBIT: Conexión Real y Saldo Board")
+    @DisplayName("✅ BYBIT: Auditoría de Subcuentas")
     void testRealBybitConnection() {
-        System.out.println("\n--- 🟡 PROBANDO BYBIT (Validando $224.0) ---");
+        System.out.println("\n--- 🟡 AUDITORÍA DE INFRAESTRUCTURA BYBIT ---");
         ExchangeConnector connector = new ExchangeConnector();
+        String[] subAccounts = {"bybit_sub1", "bybit_sub2", "bybit_sub3"};
+        double totalFound = 0;
 
-        // 1. Probamos Saldo Real (Aquí deberían aparecer tus $224 reales)
-        double balance = connector.fetchBalance("bybit_sub1", ASSET);
-        System.out.println("💰 BALANCE FACTUAL BYBIT: " + balance + " USDT");
+        for (String sub : subAccounts) {
+            double balance = connector.fetchBalance(sub, ASSET);
+            System.out.println("💰 BALANCE [" + sub.toUpperCase() + "]: " + balance + " USDT");
+            totalFound += balance;
+        }
 
-        // 2. La prueba de fuego para la IP 190.66.53.71 y el error 10010
+        System.out.println("💵 CAPITAL TOTAL EN BYBIT: " + totalFound + " USDT");
+
+        // Prueba de fuego de la IP (Error 10010)
         double fee = connector.fetchLiveWithdrawalFee("bybit_sub1", "SOL");
         System.out.println("💸 FEE RETIRO SOL (Validando IP): " + fee);
 
-        assertTrue(balance >= 0, "⚠️ ERROR: No se detecta el saldo de $224.0 del Board. Revisa la API Key.");
-        assertTrue(fee >= 0, "⚠️ ERROR 10010: Bybit aún rechaza tu IP para endpoints de Assets.");
+        assertTrue(totalFound >= 0, "Error en la lectura de balances");
+        assertTrue(fee >= 0, "IP no validada por Bybit");
     }
 
     @Test

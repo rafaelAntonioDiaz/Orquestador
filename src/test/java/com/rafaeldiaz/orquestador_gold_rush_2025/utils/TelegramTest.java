@@ -8,6 +8,8 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 public class TelegramTest {
 
     @Test
@@ -66,5 +68,35 @@ public class TelegramTest {
         if (code == 400 && body.contains("chat not found")) System.out.println("👉 PISTA: El Chat ID es incorrecto.");
         if (code == 400 && body.contains("bot was blocked")) System.out.println("👉 PISTA: Debes abrir el chat con el bot y darle a /start.");
         if (code == 404) System.out.println("👉 PISTA: La URL está mal formada (revisa el token, a veces se cuelan espacios).");
+    }
+
+    @Test
+    @DisplayName("🚀 PRUEBA DE FUEGO: Notificación de Combate")
+    void testRealNotification() {
+        String mensaje = "🥇 ¡Atención Rafael! El Ferrari está en pista.\n" +
+                "🌐 Ubicación: Floridablanca (WiFi)\n" +
+                "💰 Saldo detectado: $224.0 reales.\n" +
+                "🚀 Estado: Listo para cazar micro-profits.";
+
+        // Simplemente invocamos, ya que no devuelve valor (es void)
+        BotLogger.sendTelegram(mensaje);
+
+        System.out.println("✅ Petición de notificación enviada. Revisa tu celular.");
+    }
+    @Test
+    @DisplayName("🚀 PRUEBA DE FUEGO: Sistema de Radio Ferrari 2025")
+    void testSystemNotification() {
+        System.out.println("--- 📡 PROBANDO COMUNICACIONES OFICIALES ---");
+
+        // El mensaje que confirma que la nave está lista
+        String mensaje = "✅ [NAVE COMPLETA]: Radio sincronizada.\n" +
+                "💰 Bóveda: $224.0 USDT detectados.\n" +
+                "🌐 IP: 190.66.53.71 autorizada.\n" +
+                "🏁 Fase de construcción finalizada.";
+
+        // Invocamos el método oficial que antes daba WARNING
+        BotLogger.sendTelegram(mensaje);
+
+        System.out.println("✅ Señal enviada al espacio. Si llega a tu móvil, la nave está cerrada.");
     }
 }

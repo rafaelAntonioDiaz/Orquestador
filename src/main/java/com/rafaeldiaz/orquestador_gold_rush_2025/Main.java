@@ -1,67 +1,73 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025;
 
-import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
-import com.rafaeldiaz.orquestador_gold_rush_2025.core.DynamicPairSelector;
-import com.rafaeldiaz.orquestador_gold_rush_2025.core.MarketListener;
+import com.rafaeldiaz.orquestador_gold_rush_2025.connect.*;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.GoldRushOrchestrator;
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 
+import java.util.List;
+
 /**
- * 🚀 ORQUESTADOR PRINCIPAL - GOLD RUSH 2025 🚀
- * Arquitectura: Cerebro Adrenalina (Selector) -> Controla -> Ojos Rápidos (Listener).
+ * 🚀 ORQUESTADOR PRINCIPAL - GOLD RUSH 2025 (EDICIÓN MULTI-MOTOR) 🚀
+ * Arquitectura: Main -> Ensambla Estrategias -> Inicia Comandante (Orchestrator).
  */
 public class Main {
 
     public static void main(String[] args) {
-        BotLogger.info("================================================");
+        BotLogger.info("======================================================");
         BotLogger.info("   🚀 INICIANDO ORQUESTADOR GOLD RUSH 2025 🚀   ");
-        BotLogger.info("   Agente: ChasquiTokio | Modo: CAZADOR DE VOLATILIDAD");
+        BotLogger.info("   Agente: ChasquiTokio | Modo: CAZADOR MULTI-EXCHANGE");
         BotLogger.info("   ☕ Runtime: " + System.getProperty("java.version"));
-        BotLogger.info("================================================");
+        BotLogger.info("======================================================");
 
         try {
             // ------------------------------------------------------------
-            // PASO 1: INICIAR LOS OJOS (MarketListener)
+            // PASO 1: LA ARTERIA PRINCIPAL (Conector)
             // ------------------------------------------------------------
-            // Este componente empieza mirando SOL, AVAX y PEPE por defecto.
-            // Es capaz de recibir órdenes para cambiar de objetivo en caliente.
-            MarketListener marketListener = new MarketListener();
-            marketListener.startScanning();
-
-            BotLogger.info("✅ [1/3] Radar de Mercado (Ojos): ONLINE");
+            // Maneja las firmas, las llaves API y las peticiones HTTP seguras.
+            ExchangeConnector connector = new ExchangeConnector();
+            BotLogger.info("✅ [1/4] Conector Central: ONLINE (IP Verificada)");
 
             // ------------------------------------------------------------
-            // PASO 2: INICIAR EL CEREBRO (DynamicPairSelector)
+            // PASO 2: LOS 4 JINETES (Estrategias)
             // ------------------------------------------------------------
-            // Necesita un conector propio para hacer sus análisis macro.
-            // Y necesita acceso al 'marketListener' para decirle qué mirar.
-            ExchangeConnector connectorForBrain = new ExchangeConnector();
-
-            DynamicPairSelector adrenalineBrain = new DynamicPairSelector(connectorForBrain, marketListener);
-            adrenalineBrain.start();
-
-            BotLogger.info("✅ [2/3] Monitor de Adrenalina (Cerebro): ONLINE");
+            // Instanciamos los adaptadores para cada Exchange.
+            List<ExchangeStrategy> strategies = List.of(
+                    new BinanceStrategy(),            // API V3 Sólida
+                    new BybitStrategy(connector),     // API V5 Unificada
+                    new MexcStrategy(connector),      // El Rey de los Fees Bajos
+                    new KucoinStrategy(connector)     // El Traductor Universal
+            );
+            BotLogger.info("✅ [2/4] Motores de Trading: 4/4 ACTIVOS");
 
             // ------------------------------------------------------------
-            // PASO 3: MANTENER VIVO EL SISTEMA
+            // PASO 3: EL COMANDANTE (Orquestador)
             // ------------------------------------------------------------
-            BotLogger.info("✅ [3/3] SISTEMA AUTÓNOMO ACTIVADO. ¡BUENA CAZA!");
-            BotLogger.info("================================================");
+            // Él crea su propio Radar (DynamicPairSelector) y su Calculadora (ProfitCalculator).
+            GoldRushOrchestrator commander = new GoldRushOrchestrator(strategies, connector);
+            BotLogger.info("✅ [3/4] Comandante Supremo: LISTO");
 
-            // Hook para cierre elegante (Ctrl+C)
+            // ------------------------------------------------------------
+            // PASO 4: EJECUCIÓN
+            // ------------------------------------------------------------
+            BotLogger.info("🚀 [4/4] INICIANDO VIGILANCIA... ¡BUENA CAZA!");
+            commander.startSurveillance();
+
+            // ------------------------------------------------------------
+            // HOOK DE CIERRE (Ctrl+C)
+            // ------------------------------------------------------------
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                BotLogger.info("🛑 Deteniendo sistemas...");
-                marketListener.stop();
-                adrenalineBrain.stop();
+                BotLogger.info("\n🛑 SEÑAL DE APAGADO RECIBIDA...");
+                commander.stop(); // Genera el reporte final de ganancias
                 BotLogger.info("👋 Hasta la próxima, Ingeniero.");
             }));
 
-            // Bucle infinito para evitar que el Main muera (aunque los schedulers ya mantienen vivo el proceso)
+            // Mantenemos el hilo principal vivo (aunque el ScheduledExecutor del Orchestrator ya lo hace)
             while (true) {
-                Thread.sleep(60000); // Latido cada minuto
+                Thread.sleep(60000);
             }
 
         } catch (Exception e) {
-            BotLogger.error("🔥 ERROR FATAL EN EL ORQUESTADOR: " + e.getMessage());
+            BotLogger.error("🔥 ERROR FATAL EN EL MAIN: " + e.getMessage());
             e.printStackTrace();
         }
     }
