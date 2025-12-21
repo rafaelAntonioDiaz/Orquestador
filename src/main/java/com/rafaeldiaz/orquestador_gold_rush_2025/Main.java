@@ -1,67 +1,60 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.*;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.ArbitrageDetector;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.DynamicPairSelector;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.GoldRushOrchestrator;
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 
 import java.util.List;
 
-/**
- * 🚀 ORQUESTADOR PRINCIPAL - GOLD RUSH 2025 (EDICIÓN MULTI-MOTOR) 🚀
- * Arquitectura: Main -> Ensambla Estrategias -> Inicia Comandante (Orchestrator).
- */
 public class Main {
 
     public static void main(String[] args) {
         BotLogger.info("======================================================");
         BotLogger.info("   🚀 INICIANDO ORQUESTADOR GOLD RUSH 2025 🚀   ");
-        BotLogger.info("   Agente: ChasquiTokio | Modo: CAZADOR MULTI-EXCHANGE");
-        BotLogger.info("   ☕ Runtime: " + System.getProperty("java.version"));
+        BotLogger.info("   Agente: ChasquiTokio | Modo: CAZADOR AUTÓNOMO");
         BotLogger.info("======================================================");
 
         try {
-            // ------------------------------------------------------------
-            // PASO 1: LA ARTERIA PRINCIPAL (Conector)
-            // ------------------------------------------------------------
-            // Maneja las firmas, las llaves API y las peticiones HTTP seguras.
+            // 1. CONECTOR BASE
             ExchangeConnector connector = new ExchangeConnector();
-            BotLogger.info("✅ [1/4] Conector Central: ONLINE (IP Verificada)");
+            BotLogger.info("✅ [1/4] Conector Central: ONLINE");
+
+            // 2. SISTEMA SENSORIAL (OJOS Y OÍDOS)
+            // BybitStreamer se conecta automáticamente al instanciarse
+            BybitStreamer streamer = new BybitStreamer();
+
+            // 3. LÓGICA DE NEGOCIO (EL CAZADOR)
+            // El detector procesa los precios que llegan del streamer
+            ArbitrageDetector detector = new ArbitrageDetector(connector);
+            streamer.addListener(detector); // Conexión Ojos -> Cazador
+
+            // 4. INTELIGENCIA DE MERCADO (EL CEREBRO)
+            // El selector analiza volatilidad y le dice al streamer qué mirar.
+            // AHORA SÍ: 'streamer' implementa MarketListener, así que esto compila y funciona.
+            DynamicPairSelector selector = new DynamicPairSelector(connector, streamer);
+
+            // 5. INICIO DE SISTEMAS AUTÓNOMOS
+            BotLogger.info("🧠 Iniciando Lóbulo Frontal (Selector Dinámico)...");
+            selector.start(); // Inicia el loop de 60s
+
+            // Nota: streamer.start() no es necesario si se inicia en el constructor,
+            // pero si añadiste el método start() sugerido, déjalo.
+
+            BotLogger.info("✅ [SISTEMA INTEGRADO]: Cerebro, Ojos y Manos conectados.");
 
             // ------------------------------------------------------------
-            // PASO 2: LOS 4 JINETES (Estrategias)
-            // ------------------------------------------------------------
-            // Instanciamos los adaptadores para cada Exchange.
-            List<ExchangeStrategy> strategies = List.of(
-                    new BinanceStrategy(),            // API V3 Sólida
-                    new BybitStrategy(connector),     // API V5 Unificada
-                    new MexcStrategy(connector),      // El Rey de los Fees Bajos
-                    new KucoinStrategy(connector)     // El Traductor Universal
-            );
-            BotLogger.info("✅ [2/4] Motores de Trading: 4/4 ACTIVOS");
-
-            // ------------------------------------------------------------
-            // PASO 3: EL COMANDANTE (Orquestador)
-            // ------------------------------------------------------------
-            // Él crea su propio Radar (DynamicPairSelector) y su Calculadora (ProfitCalculator).
-            GoldRushOrchestrator commander = new GoldRushOrchestrator(strategies, connector);
-            BotLogger.info("✅ [3/4] Comandante Supremo: LISTO");
-
-            // ------------------------------------------------------------
-            // PASO 4: EJECUCIÓN
-            // ------------------------------------------------------------
-            BotLogger.info("🚀 [4/4] INICIANDO VIGILANCIA... ¡BUENA CAZA!");
-            commander.startSurveillance();
-
-            // ------------------------------------------------------------
-            // HOOK DE CIERRE (Ctrl+C)
+            // MANTENIMIENTO DEL PROCESO
             // ------------------------------------------------------------
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 BotLogger.info("\n🛑 SEÑAL DE APAGADO RECIBIDA...");
-                commander.stop(); // Genera el reporte final de ganancias
+                selector.stop();
+                streamer.stop();
                 BotLogger.info("👋 Hasta la próxima, Ingeniero.");
             }));
 
-            // Mantenemos el hilo principal vivo (aunque el ScheduledExecutor del Orchestrator ya lo hace)
+            // Loop infinito para mantener vivo el main thread
             while (true) {
                 Thread.sleep(60000);
             }

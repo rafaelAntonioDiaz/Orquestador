@@ -2,21 +2,20 @@ package com.rafaeldiaz.orquestador_gold_rush_2025.connect;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.MarketListener; // <--- IMPORTACIÓN CRÍTICA
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 import okhttp3.*;
 
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
  * Implementación REAL con WebSockets para Bybit.
- * Hereda de MarketStreamer (Clase Abstracta).
+ * Hereda de MarketStreamer y ahora escucha al Cerebro Táctico (MarketListener).
  */
-public class BybitStreamer extends MarketStreamer {
+public class BybitStreamer extends MarketStreamer implements MarketListener { // <--- CONTRATO FIRMADO
 
     private static final String WS_URL = "wss://stream.bybit.com/v5/public/spot";
 
@@ -24,7 +23,7 @@ public class BybitStreamer extends MarketStreamer {
     private final ObjectMapper mapper = new ObjectMapper();
     private WebSocket webSocket;
 
-    // Guardamos suscripciones para reconexión automática
+    // Guardamos suscripciones para reconexión automática y gestión de targets
     private final Set<String> subscribedPairs = Collections.synchronizedSet(new HashSet<>());
 
     // Executor para Heartbeat y Reconexión
@@ -40,6 +39,12 @@ public class BybitStreamer extends MarketStreamer {
         BotLogger.info("🔌 Iniciando Motor WebSocket Bybit...");
         connect();
     }
+    public void start() {
+        if (!isActive) {
+            BotLogger.info("🔌 Reiniciando conexión manual...");
+            connect();
+        }
+    }
 
     private void connect() {
         Request request = new Request.Builder().url(WS_URL).build();
@@ -49,27 +54,82 @@ public class BybitStreamer extends MarketStreamer {
         scheduler.scheduleAtFixedRate(this::sendPing, 15, 20, TimeUnit.SECONDS);
     }
 
-    // --- IMPLEMENTACIÓN DEL CONTRATO (MarketStreamer) ---
+    // =========================================================================
+    // 🧠 NUEVO: IMPLEMENTACIÓN DE MARKET LISTENER (SMART SWAPPING)
+    // =========================================================================
+    @Override
+    public synchronized void updateTargets(List<String> newTargets) {
+        if (newTargets == null) newTargets = new ArrayList<>();
+        // BotLogger.info("🔄 STREAMER: Optimizando sensores hacia -> " + newTargets);
+        // 🛡️ BLINDAJE: Siempre agregar el PIVOTE (BTCUSDT)
+        // Sin esto, la triangulación falla porque nos falta el tercer lado del triángulo.
+        List<String> tacticalTargets = new ArrayList<>(newTargets);
+        if (!tacticalTargets.contains("BTCUSDT")) {
+            tacticalTargets.add("BTCUSDT");
+        }
+        BotLogger.info("🔄 STREAMER: Recalibrando sensores hacia -> " + tacticalTargets);
+        // 1. Convertir targets a Set para operaciones matemáticas
+        Set<String> desiredSet = new HashSet<>(newTargets);
+
+        // 2. Snapshot seguro de lo que tenemos actualmente
+        Set<String> currentSet;
+        synchronized (subscribedPairs) {
+            currentSet = new HashSet<>(subscribedPairs);
+        }
+
+        // 3. CALCULAR DELTA (Diferencial)
+
+        // A. Qué sobra (Están en Current pero NO en Desired)
+        Set<String> toUnsubscribe = new HashSet<>(currentSet);
+        toUnsubscribe.removeAll(desiredSet);
+
+        // B. Qué falta (Están en Desired pero NO en Current)
+        Set<String> toSubscribe = new HashSet<>(desiredSet);
+        toSubscribe.removeAll(currentSet);
+
+        // 4. EJECUCIÓN (Solo tocamos lo necesario, no reiniciamos nada)
+        if (!toUnsubscribe.isEmpty()) {
+            for (String pair : toUnsubscribe) {
+                unsubscribe(pair);
+                BotLogger.info("🔇 [AUTO] Dejando de escuchar: " + pair);
+            }
+        }
+
+        if (!toSubscribe.isEmpty()) {
+            for (String pair : toSubscribe) {
+                subscribe(pair);
+                BotLogger.info("🔈 [AUTO] Escuchando nuevo objetivo: " + pair);
+            }
+        }
+
+        // Si no hubo cambios, no hacemos nada (Eficiencia Zen)
+    }
+
+    // =========================================================================
+    // ⚡ MÉTODOS DEL CONTRATO ORIGINAL (INTACTOS)
+    // =========================================================================
 
     @Override
     public void subscribe(String pair) {
-        subscribedPairs.add(pair);
-        if (webSocket != null && isActive) {
-            // JSON V5: {"op": "subscribe", "args": ["tickers.BTCUSDT"]}
-            String msg = String.format("{\"op\": \"subscribe\", \"args\": [\"tickers.%s\"]}", pair);
-            webSocket.send(msg);
-            BotLogger.info("📡 [WS] Suscribiendo a: " + pair);
+        if (subscribedPairs.add(pair)) { // Solo enviar si es nuevo en el set
+            if (webSocket != null && isActive) {
+                // JSON V5: {"op": "subscribe", "args": ["tickers.BTCUSDT"]}
+                String msg = String.format("{\"op\": \"subscribe\", \"args\": [\"tickers.%s\"]}", pair);
+                webSocket.send(msg);
+                BotLogger.info("📡 [WS] Suscribiendo a: " + pair);
+            }
         }
     }
 
     @Override
     public void unsubscribe(String pair) {
-        subscribedPairs.remove(pair);
-        if (webSocket != null && isActive) {
-            // JSON V5: {"op": "unsubscribe", "args": ["tickers.BTCUSDT"]}
-            String msg = String.format("{\"op\": \"unsubscribe\", \"args\": [\"tickers.%s\"]}", pair);
-            webSocket.send(msg);
-            BotLogger.info("🔕 [WS] Desuscribiendo de: " + pair);
+        if (subscribedPairs.remove(pair)) { // Solo enviar si existía
+            if (webSocket != null && isActive) {
+                // JSON V5: {"op": "unsubscribe", "args": ["tickers.BTCUSDT"]}
+                String msg = String.format("{\"op\": \"unsubscribe\", \"args\": [\"tickers.%s\"]}", pair);
+                webSocket.send(msg);
+                BotLogger.info("🔕 [WS] Desuscribiendo de: " + pair);
+            }
         }
     }
 
@@ -88,15 +148,15 @@ public class BybitStreamer extends MarketStreamer {
         return isActive;
     }
 
-    // --- UTILIDADES INTERNAS ---
-
     private void sendPing() {
         if (webSocket != null && isActive) {
             webSocket.send("{\"op\": \"ping\"}");
         }
     }
 
-    // --- OYENTE INTERNO DEL WEBSOCKET ---
+    // =========================================================================
+    // 👂 OYENTE INTERNO (Lógica de Recepción)
+    // =========================================================================
 
     private class BybitWebSocketListener extends WebSocketListener {
 
@@ -104,9 +164,13 @@ public class BybitStreamer extends MarketStreamer {
         public void onOpen(WebSocket webSocket, Response response) {
             BotLogger.info("✅ Conexión WebSocket Bybit ESTABLECIDA");
             isActive = true;
-            // Re-suscribir lo que teníamos pendiente
-            for (String pair : subscribedPairs) {
-                subscribe(pair);
+            // Re-suscribir lo que teníamos pendiente (Resilience)
+            synchronized (subscribedPairs) {
+                for (String pair : subscribedPairs) {
+                    // Reenviar comando manual para recuperar estado tras desconexión
+                    String msg = String.format("{\"op\": \"subscribe\", \"args\": [\"tickers.%s\"]}", pair);
+                    webSocket.send(msg);
+                }
             }
         }
 
@@ -132,7 +196,7 @@ public class BybitStreamer extends MarketStreamer {
                         double price = data.get("lastPrice").asDouble();
                         long ts = root.has("ts") ? root.get("ts").asLong() : System.currentTimeMillis();
 
-                        // 🔥 AQUÍ ESTÁ LA MAGIA: Usamos el método del padre para avisar a todos
+                        // 🔥 MAGIA PURA: Usamos el método del padre para notificar a todo el sistema
                         notifyListeners("bybit", pair, price, ts);
                     }
                 }
@@ -151,7 +215,7 @@ public class BybitStreamer extends MarketStreamer {
         public void onFailure(WebSocket webSocket, Throwable t, Response response) {
             BotLogger.error("🔥 Error WS Bybit: " + t.getMessage());
             isActive = false;
-            // Podríamos intentar reconectar aquí tras un delay
+            // Nota: El Scheduler podría intentar reconectar en versiones futuras
         }
     }
 }

@@ -30,7 +30,8 @@ public class DeepMarketScanner {
 
     private final List<String> exchanges = List.of("binance", "bybit", "mexc", "kucoin");
     // Agregamos más activos para ver más acción
-    private final List<String> huntingGrounds = List.of("SOL", "XRP", "DOGE", "AVAX", "PEPE", "USDT", "BTC", "ADA", "LINK");
+    private final List<String> huntingGrounds = List.of("SOL", "XRP", "DOGE", "AVAX", "PEPE", "USDT", "BTC", "ADA", "LINK"
+            ,"SUI", "WIF", "FET", "RNDR", "APT", "SEI", "INJ","TIA","BONK","FLOKI");
 
     // METRICS
     private final DoubleAdder totalPotentialProfit = new DoubleAdder();
@@ -48,6 +49,18 @@ public class DeepMarketScanner {
 
     public void setDryRun(boolean dryRun) {
         this.dryRun = dryRun;
+    }
+
+    public long getTradesCount() {
+        return tradesCount.get();
+    }
+
+    public double getTotalPotentialProfit() {
+        return totalPotentialProfit.sum();
+    }
+
+    public String getBestOpportunityLog() {
+        return bestOpportunityLog.equals("N/A") ? "Buscando..." : bestOpportunityLog;
     }
 
     public void startOmniScan(int durationMinutes) {

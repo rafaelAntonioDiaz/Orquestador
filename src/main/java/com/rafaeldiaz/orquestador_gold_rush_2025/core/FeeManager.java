@@ -7,14 +7,17 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 💲 GESTOR DE TARIFAS VIVO (CON PROTOCOLO PEP) 💲
- * Autoridad central de costos. Maneja Caché, APIs y estimaciones pesimistas.
+ * 💲 GESTOR DE TARIFAS ADAPTATIVO (SMART FEE MANAGER) 💲
+ * Autoridad central de costos.
+ * Evolución: Inicia con valores pesimistas, pero APRENDE los costos reales
+ * y los recuerda para no bloquear operaciones válidas por falta de datos.
  */
 public class FeeManager {
 
     private final ExchangeConnector connector;
 
-    // --- CACHÉ ---
+    // --- CACHÉ DE CORTO PLAZO (TTL) ---
+    // Guarda el dato fresco por un tiempo limitado para no saturar la API
     private final Map<String, double[]> tradingFeeCache = new ConcurrentHashMap<>();
     private final Map<String, Double> withdrawalFeeCache = new ConcurrentHashMap<>();
 
@@ -24,22 +27,27 @@ public class FeeManager {
     private static final long TTL_TRADING = 60 * 60 * 1000; // 1 Hora
     private static final long TTL_WITHDRAW = 15 * 60 * 1000; // 15 Minutos
 
-    // 🛡️ MAPA DE TARIFAS PESIMISTAS (INDUSTRY CEILING)
-    // Se usan SOLO si la API falla o no tenemos credenciales para leer el fee real.
-    private static final Map<String, Double> PESSIMISTIC_FEES = new ConcurrentHashMap<>();
-    static {
-        PESSIMISTIC_FEES.put("BTC", 0.0006);    // ~$50 USD
-        PESSIMISTIC_FEES.put("ETH", 0.005);     // ~$15 USD
-        PESSIMISTIC_FEES.put("SOL", 0.02);      // ~$3 USD (Alto, pero seguro)
-        PESSIMISTIC_FEES.put("AVAX", 0.1);
-        PESSIMISTIC_FEES.put("XRP", 1.0);
-        PESSIMISTIC_FEES.put("PEPE", 2000000.0); // Ajustado a realidad
-        PESSIMISTIC_FEES.put("USDT", 2.0);      // Promedio TRC20/BSC
-    }
+    // --- MEMORIA DE LARGO PLAZO (KNOWLEDGE BASE) ---
+    // Inicia con valores "Monstruosos" por seguridad, pero se actualiza con la REALIDAD.
+    // Si la API falla, usamos el último valor real conocido, no el monstruo inicial.
+    private final Map<String, Double> knownNetworkFees = new ConcurrentHashMap<>();
 
     public FeeManager(ExchangeConnector connector) {
         this.connector = connector;
-        BotLogger.info("💲 FeeManager: Protocolo PEP (Pesimista) ACTIVADO.");
+        initializeSafetyDefaults();
+        BotLogger.info("💲 FeeManager: Memoria Adaptativa INICIADA.");
+    }
+
+    private void initializeSafetyDefaults() {
+        // Valores iniciales "Paracaídas" (Solo se usan si NUNCA hemos podido leer la API)
+        knownNetworkFees.put("BTC", 0.0006);
+        knownNetworkFees.put("ETH", 0.005);
+        knownNetworkFees.put("SOL", 0.02);      // Empieza asumiendo ~$4
+        knownNetworkFees.put("AVAX", 0.1);
+        knownNetworkFees.put("XRP", 1.0);
+        knownNetworkFees.put("PEPE", 2000000.0); // Empieza asumiendo ~$20
+        knownNetworkFees.put("USDT", 2.0);
+        // Si entra una moneda nueva que no conocemos, asumiremos un default en tiempo de ejecución.
     }
 
     // =========================================================================
@@ -54,10 +62,9 @@ public class FeeManager {
         // Obtenemos fee de retiro (Cantidad de monedas)
         double withdrawQty = getWithdrawalFee(sourceEx, asset);
 
-        // Si falló totalmente (ni API ni Pesimista), devolvemos costo infinito para evitar trade
-        if (withdrawQty < 0) return 99999999.9;
-
+        // Costo en USD del retiro
         double withdrawCostUSD = withdrawQty * currentPrice;
+
         return buyCost + sellCost + withdrawCostUSD;
     }
 
@@ -66,12 +73,11 @@ public class FeeManager {
     // =========================================================================
     public double calculateTradingCost(String exchange, String pair, double amountUSDT) {
         double[] rates = getTradingFeeRate(exchange, pair);
-        // Usamos el Taker Fee (rates[0]) por defecto para ser conservadores
-        return amountUSDT * rates[0];
+        return amountUSDT * rates[0]; // Usamos Taker Fee por seguridad
     }
 
     // =========================================================================
-    // 🔍 MOTORES DE BÚSQUEDA
+    // 🔍 MOTORES DE BÚSQUEDA INTELIGENTE
     // =========================================================================
 
     private double[] getTradingFeeRate(String exchange, String pair) {
@@ -84,8 +90,8 @@ public class FeeManager {
 
         double[] freshRates = connector.fetchDynamicTradingFee(exchange, pair);
 
-        // 🚨 CORRECCIÓN: Umbral subido al 20% (0.2) para tolerar Memecoins con Tax
-        if (freshRates[0] > 0.2 || freshRates[0] < 0) freshRates[0] = 0.001; // Default 0.1%
+        // Validación anti-scam (Tax Tokens)
+        if (freshRates[0] > 0.2 || freshRates[0] < 0) freshRates[0] = 0.001;
         if (freshRates[1] > 0.2 || freshRates[1] < 0) freshRates[1] = 0.001;
 
         tradingFeeCache.put(key, freshRates);
@@ -94,43 +100,45 @@ public class FeeManager {
     }
 
     /**
-     * Obtiene el fee de retiro. AHORA ES PÚBLICO.
-     * @param exchange Nombre del exchange (binance, bybit)
-     * @param coin Símbolo de la moneda (BTC, SOL, USDT)
-     * @return Cantidad de moneda que cobra la red (o negativo si falla)
+     * Obtiene el fee de retiro con INTELIGENCIA ADAPTATIVA.
+     * 1. Busca en Caché reciente (TTL).
+     * 2. Intenta API en vivo.
+     * -> Si ÉXITO: Actualiza Caché y MEJORA la Memoria de Largo Plazo (Olvida al monstruo).
+     * -> Si FALLO: Usa la Memoria de Largo Plazo (que puede ser el monstruo inicial o un dato real previo).
      */
     public double getWithdrawalFee(String exchange, String coin) {
         String key = exchange + "_" + coin;
         long now = System.currentTimeMillis();
 
-        // 1. Revisar Caché
+        // 1. Revisar Caché Fresco (Velocidad HFT)
         if (withdrawalFeeCache.containsKey(key) && (now - lastUpdateWithdraw.getOrDefault(key, 0L) < TTL_WITHDRAW)) {
             return withdrawalFeeCache.get(key);
         }
 
-        // 2. Intentar Fetch Real (Requiere API Keys válidas en Connector)
+        // 2. Intentar Fetch Real (La Verdad del Mercado)
         double freshFee = connector.fetchLiveWithdrawalFee(exchange, coin);
 
-        // 3. Fallback: Si la API falla (-1.0), usamos la Tabla Pesimista
-        if (freshFee < 0) {
-            double pessimisticFee = PESSIMISTIC_FEES.getOrDefault(coin, -1.0);
+        if (freshFee >= 0) {
+            // ✅ ÉXITO: Aprendimos el costo real.
+            // Actualizamos la memoria inmediata
+            withdrawalFeeCache.put(key, freshFee);
+            lastUpdateWithdraw.put(key, now);
 
-            if (pessimisticFee > 0) {
-                // Logueamos advertencia solo la primera vez para no ensuciar la consola
-                if (!withdrawalFeeCache.containsKey(key)) {
-                    BotLogger.warn("⚠️ API Fee Error (" + exchange + "/" + coin + "). Usando Pesimista: " + pessimisticFee);
-                }
-                freshFee = pessimisticFee;
-            } else {
-                // Si no está en la tabla pesimista, usamos un default genérico de emergencia
-                // (Mejor perder un trade por fee alto estimado que perder dinero real)
-                freshFee = 0.05; // Default agresivo si no sabemos qué moneda es
-            }
+            // 🔥 APRENDIZAJE: Actualizamos la base de conocimiento para el futuro.
+            // Si antes pensábamos que PEPE costaba 2M, y la API dice 300k, ahora recordaremos 300k.
+            knownNetworkFees.put(coin, freshFee);
+
+            return freshFee;
         }
 
-        withdrawalFeeCache.put(key, freshFee);
-        lastUpdateWithdraw.put(key, now);
+        // 3. FALLBACK INTELIGENTE (Si la API falla)
+        // No devolvemos error (-1), devolvemos "Lo mejor que sabemos hasta ahora".
+        // Si ya habíamos operado antes, este valor será realista. Si es el primer intento, será el default seguro.
+        double bestKnownFee = knownNetworkFees.getOrDefault(coin, 0.1); // 0.1 Genérico si es moneda rara nueva
 
-        return freshFee;
+        // Solo logueamos si estamos recurriendo a memoria para no ensuciar logs
+        // BotLogger.warn("⚠️ API Fee Off (" + exchange + "). Usando Memoria para " + coin + ": " + bestKnownFee);
+
+        return bestKnownFee;
     }
 }

@@ -5,7 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 import io.github.cdimascio.dotenv.Dotenv;
 import okhttp3.*;
-
+import java.io.IOException;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
@@ -19,10 +19,14 @@ public class ExchangeConnector {
         String get(String key);
     }
 
+    // 📦 ESTRUCTURA DE DATOS PARA EL LIBRO DE ÓRDENES (NUEVO FASE 2)
+    public record OrderBook(List<double[]> bids, List<double[]> asks) {}
+
     private final OkHttpClient client;
     private final ObjectMapper mapper;
     private final EnvProvider envProvider;
-
+    private static final int MAX_RETRIES = 3;
+    private static final long INITIAL_BACKOFF_MS = 500;
     private static final String BYBIT_URL = "https://api.bybit.com";
     private static final String BINANCE_URL = "https://api.binance.com";
     private static final String MEXC_URL = "https://api.mexc.com";
@@ -75,7 +79,7 @@ public class ExchangeConnector {
                 }
             } else if (exchange.equals("kucoin")) {
                 Request request = buildKucoinRequest("GET", "/api/v1/accounts?currency=" + asset, "");
-                try (Response response = client.newCall(request).execute()) {
+                try (Response response = executeWithRetry(request)) {
                     if (response.isSuccessful()) {
                         JsonNode root = mapper.readTree(response.body().string());
                         if (root.get("code").asText().equals("200000")) {
@@ -129,8 +133,14 @@ public class ExchangeConnector {
         if (exchange.startsWith("bybit")) {
             String sideCap = side.equalsIgnoreCase("BUY") ? "Buy" : "Sell";
             String orderType = type.equalsIgnoreCase("LIMIT") ? "Limit" : "Market";
-            String json = String.format("{\"category\":\"spot\",\"symbol\":\"%s\",\"side\":\"%s\",\"orderType\":\"%s\",\"qty\":\"%s\"%s}",
-                    pair, sideCap, orderType, String.valueOf(qty), orderType.equals("Limit") ? ",\"price\":\"" + price + "\"" : "");
+            // FOK (Fill Or Kill) solo aplica para LIMIT en Bybit V5
+            String timeInForce = (type.equalsIgnoreCase("LIMIT")) ? ",\"timeInForce\":\"FOK\"" : "";
+
+            String json = String.format("{\"category\":\"spot\",\"symbol\":\"%s\",\"side\":\"%s\",\"orderType\":\"%s\",\"qty\":\"%s\"%s%s}",
+                    pair, sideCap, orderType, String.valueOf(qty),
+                    orderType.equals("Limit") ? ",\"price\":\"" + price + "\"" : "",
+                    timeInForce);
+
             return buildSignedRequest(exchange, "POST", "/v5/order/create", json);
         }
         return null;
@@ -146,7 +156,7 @@ public class ExchangeConnector {
                 default -> BYBIT_URL + "/v5/market/tickers?category=spot&symbol=" + cleanPair;
             };
             Request request = new Request.Builder().url(url).get().build();
-            try (Response response = client.newCall(request).execute()) {
+            try (Response response = executeWithRetry(request)) {
                 if (!response.isSuccessful()) return 0.0;
                 JsonNode root = mapper.readTree(response.body().string());
                 if (exchange.startsWith("bybit")) return Double.parseDouble(root.get("result").get("list").get(0).get("lastPrice").asText());
@@ -157,7 +167,90 @@ public class ExchangeConnector {
     }
 
     // =========================================================================
-    // 🕯️ 3. VELAS Y HISTORIAL (Para DynamicSelector)
+    // 📖 2.5 VISIÓN DE RAYOS X (ORDER BOOK) - FASE 2 [NUEVO]
+    // =========================================================================
+    /**
+     * Descarga la profundidad del mercado (Bids y Asks) para calcular Slippage.
+     */
+    public OrderBook fetchOrderBook(String exchange, String pair, int depth) {
+        String cleanPair = pair.replace("-", "").toUpperCase();
+        List<double[]> bids = new ArrayList<>();
+        List<double[]> asks = new ArrayList<>();
+
+        try {
+            String url = "";
+            if (exchange.equalsIgnoreCase("binance") || exchange.equalsIgnoreCase("mexc")) {
+                url = (exchange.equalsIgnoreCase("binance") ? BINANCE_URL : MEXC_URL)
+                        + "/api/v3/depth?symbol=" + cleanPair + "&limit=" + depth;
+            } else if (exchange.toLowerCase().contains("bybit")) {
+                url = BYBIT_URL + "/v5/market/orderbook?category=spot&symbol=" + cleanPair + "&limit=" + depth;
+            } else if (exchange.equalsIgnoreCase("kucoin")) {
+                String kPair = pair.contains("-") ? pair : pair.replace("USDT", "-USDT");
+                url = KUCOIN_URL + "/api/v1/market/orderbook/level2_20?symbol=" + kPair;
+            }
+
+            Request request = new Request.Builder().url(url).get().build();
+            try (Response response = executeWithRetry(request)) {
+                if (!response.isSuccessful()) return new OrderBook(bids, asks);
+
+                JsonNode root = mapper.readTree(response.body().string());
+                JsonNode bNode = null, aNode = null;
+
+                if (exchange.equalsIgnoreCase("binance") || exchange.equalsIgnoreCase("mexc")) {
+                    bNode = root.get("bids");
+                    aNode = root.get("asks");
+                } else if (exchange.toLowerCase().contains("bybit")) {
+                    bNode = root.get("result").get("b");
+                    aNode = root.get("result").get("a");
+                } else if (exchange.equalsIgnoreCase("kucoin")) {
+                    bNode = root.get("data").get("bids");
+                    aNode = root.get("data").get("asks");
+                }
+
+                if (bNode != null) for (JsonNode n : bNode) bids.add(new double[]{n.get(0).asDouble(), n.get(1).asDouble()});
+                if (aNode != null) for (JsonNode n : aNode) asks.add(new double[]{n.get(0).asDouble(), n.get(1).asDouble()});
+            }
+        } catch (Exception e) {
+            BotLogger.error("📚 Error Fetch OrderBook " + exchange + ": " + e.getMessage());
+        }
+        return new OrderBook(bids, asks);
+    }
+
+    /**
+     * Calcula el precio promedio real simulando una compra/venta contra el libro.
+     * @param book El libro de órdenes descargado.
+     * @param side "BUY" (come del Ask) o "SELL" (come del Bid).
+     * @param amount La cantidad de moneda base (ej. SOL) que quieres mover.
+     * @return El precio promedio por unidad incluyendo Slippage.
+     */
+    public double calculateWeightedPrice(OrderBook book, String side, double amount) {
+        List<double[]> orders = side.equalsIgnoreCase("BUY") ? book.asks() : book.bids();
+        if (orders == null || orders.isEmpty()) return 0.0;
+
+        double filledQty = 0.0;
+        double totalCost = 0.0;
+
+        for (double[] order : orders) {
+            double price = order[0];
+            double qty = order[1];
+            double needed = amount - filledQty;
+
+            if (qty >= needed) {
+                totalCost += needed * price;
+                filledQty += needed;
+                break;
+            } else {
+                totalCost += qty * price;
+                filledQty += qty;
+            }
+        }
+
+        if (filledQty < amount * 0.9) return 0.0; // No hay suficiente liquidez
+        return totalCost / filledQty;
+    }
+
+    // =========================================================================
+    // 🕯️ 3. VELAS Y HISTORIAL
     // =========================================================================
     public List<double[]> fetchCandles(String exchange, String pair, String interval, int limit) {
         List<double[]> candles = new ArrayList<>();
@@ -171,7 +264,7 @@ public class ExchangeConnector {
             };
 
             Request request = new Request.Builder().url(url).get().build();
-            try (Response response = client.newCall(request).execute()) {
+            try (Response response = executeWithRetry(request)) {
                 if (!response.isSuccessful()) return candles;
                 JsonNode root = mapper.readTree(response.body().string());
                 JsonNode list = exchange.startsWith("bybit") ? root.get("result").get("list") :
@@ -196,13 +289,8 @@ public class ExchangeConnector {
     // 📊 4. GESTIÓN DE FEES (REAL & DINÁMICA)
     // =========================================================================
 
-    /**
-     * Consulta fee de trading dinámico. (Requerido por FeeManager)
-     * @return double[] {MakerFee, TakerFee}
-     */
     public double[] fetchDynamicTradingFee(String exchange, String pair) {
         // MVP: Retorna 0.1% estándar.
-        // TODO: Implementar /api/v3/account o /v5/account/fee-rate para obtener VIP levels.
         return new double[]{0.001, 0.001};
     }
 
@@ -227,9 +315,7 @@ public class ExchangeConnector {
         }
     }
 
-    // --- LÓGICA ESPECÍFICA BINANCE (SAPI V1) ---
     private double getBinanceWithdrawFee(String coin) throws Exception {
-        // Validar Keys
         String apiKey = getApiKey("binance");
         String secret = getApiSecret("binance");
         if(apiKey == null || secret == null) return -1.0;
@@ -246,20 +332,16 @@ public class ExchangeConnector {
                 .get()
                 .build();
 
-        try (Response response = client.newCall(request).execute()) {
+        try (Response response = executeWithRetry(request)) {
             if (!response.isSuccessful()) return -1.0;
             String body = response.body().string();
-
-            // Parseo Manual (String) para evitar estructuras complejas de Jackson para este caso
             if (!body.contains("\"coin\":\"" + coin + "\"")) return -1.0;
 
             int coinIndex = body.indexOf("\"coin\":\"" + coin + "\"");
             String coinBlock = body.substring(coinIndex);
-
-            // Buscar coincidencias de red
             String networkSearch = "\"network\":\"" + coin + "\"";
             int netIndex = coinBlock.indexOf(networkSearch);
-            if (netIndex == -1) netIndex = coinBlock.indexOf("\"withdrawFee\":"); // Fallback
+            if (netIndex == -1) netIndex = coinBlock.indexOf("\"withdrawFee\":");
 
             if (netIndex != -1) {
                 String sub = coinBlock.substring(netIndex);
@@ -271,29 +353,90 @@ public class ExchangeConnector {
         return -1.0;
     }
 
-    // --- LÓGICA ESPECÍFICA BYBIT (V5) ---
     private double getBybitWithdrawFee(String coin) throws Exception {
-        // Reutilizamos buildSignedRequest que ya maneja Headers V5 correctamente
         String endpoint = "/v5/asset/coin/query-info?coin=" + coin;
-
-        // Si usamos subcuenta "bybit_sub1", asegurar que tenemos permiso.
-        // Si es cuenta main, usar "bybit". Por defecto usamos el conector configurado.
         Request request = buildSignedRequest("bybit_sub1", "GET", endpoint, "");
-
         if (request == null) return -1.0;
 
-        try (Response response = client.newCall(request).execute()) {
+        try (Response response = executeWithRetry(request)) {
             if (!response.isSuccessful()) return -1.0;
             String body = response.body().string();
-
-            // Parseo Manual
             String feeTag = "\"withdrawFee\":\"";
             int feeIndex = body.indexOf(feeTag);
-
             if (feeIndex != -1) {
                 int start = feeIndex + feeTag.length();
                 int end = body.indexOf("\"", start);
                 return Double.parseDouble(body.substring(start, end));
+            }
+        }
+        return -1.0;
+    }
+
+    private double getMexcWithdrawFee(String coin) throws Exception {
+        String apiKey = getApiKey("mexc");
+        String secret = getApiSecret("mexc");
+        if (apiKey == null || secret == null) return -1.0;
+
+        String endpoint = "/api/v3/capital/config/getall";
+        String queryString = "timestamp=" + System.currentTimeMillis() + "&recvWindow=10000";
+        String signature = hmacSha256(queryString, secret);
+        String url = "https://api.mexc.com" + endpoint + "?" + queryString + "&signature=" + signature;
+
+        Request request = new Request.Builder()
+                .url(url)
+                .header("X-MEXC-APIKEY", apiKey)
+                .header("Content-Type", "application/json")
+                .get()
+                .build();
+
+        try (Response response = executeWithRetry(request)) {
+            if (!response.isSuccessful()) return -1.0;
+            String rawBody = response.body().string();
+            JsonNode root = mapper.readTree(rawBody);
+            if (root.isArray()) {
+                for (JsonNode asset : root) {
+                    if (asset.get("coin").asText().equalsIgnoreCase(coin)) {
+                        JsonNode networks = asset.get("networkList");
+                        if (networks != null && networks.isArray()) {
+                            for (JsonNode net : networks) {
+                                String netName = net.get("network").asText();
+                                if (netName.contains(coin) || netName.equalsIgnoreCase(coin)) {
+                                    return net.get("withdrawFee").asDouble();
+                                }
+                            }
+                            if (networks.size() > 0) return networks.get(0).get("withdrawFee").asDouble();
+                        }
+                    }
+                }
+            }
+        }
+        return -1.0;
+    }
+
+    private double getKucoinWithdrawFee(String coin) throws Exception {
+        String url = "https://api.kucoin.com/api/v2/currencies/" + coin;
+        Request request = new Request.Builder().url(url).get().build();
+        try (Response response = executeWithRetry(request)) {
+            if (!response.isSuccessful()) return -1.0;
+            String rawBody = response.body().string();
+            JsonNode root = mapper.readTree(rawBody);
+            if (root.has("code") && root.get("code").asText().equals("200000")) {
+                JsonNode data = root.get("data");
+                if (data != null && data.has("chains")) {
+                    JsonNode chains = data.get("chains");
+                    double bestFee = 99999.0;
+                    boolean found = false;
+                    for (JsonNode chain : chains) {
+                        if (chain.has("isWithdrawEnabled") && chain.get("isWithdrawEnabled").asBoolean()) {
+                            double fee = chain.get("withdrawalMinFee").asDouble();
+                            if (fee < bestFee) {
+                                bestFee = fee;
+                                found = true;
+                            }
+                        }
+                    }
+                    if (found) return bestFee;
+                }
             }
         }
         return -1.0;
@@ -312,19 +455,15 @@ public class ExchangeConnector {
 
         long timestamp = Instant.now().toEpochMilli();
         String recvWindow = "5000";
-
         String paramStr = "";
         if ("GET".equals(method)) {
-            if (endpoint.contains("?")) {
-                paramStr = endpoint.substring(endpoint.indexOf("?") + 1);
-            }
+            if (endpoint.contains("?")) paramStr = endpoint.substring(endpoint.indexOf("?") + 1);
         } else {
             paramStr = (jsonPayload == null) ? "" : jsonPayload;
         }
 
         String strToSign = timestamp + apiKey + recvWindow + paramStr;
         String signature = hmacSha256(strToSign, secretKey);
-
         String fullUrl = BYBIT_URL + endpoint;
 
         Request.Builder builder = new Request.Builder()
@@ -342,7 +481,6 @@ public class ExchangeConnector {
         } else {
             builder.get();
         }
-
         return builder.build();
     }
 
@@ -407,111 +545,16 @@ public class ExchangeConnector {
             default -> envProvider.get(ex.toUpperCase() + "_SECRET");
         };
     }
-    // ==========================================
-    // 🏛️ IMPLEMENTACIÓN MEXC (AUDITADA V3)
-    // ==========================================
-// ==========================================
-    // 🏛️ IMPLEMENTACIÓN MEXC (LIMPIA)
-    // ==========================================
-    private double getMexcWithdrawFee(String coin) throws Exception {
-        String apiKey = getApiKey("mexc");
-        String secret = getApiSecret("mexc");
-        if (apiKey == null || secret == null) return -1.0;
 
-        String endpoint = "/api/v3/capital/config/getall";
-        String queryString = "timestamp=" + System.currentTimeMillis() + "&recvWindow=10000";
-        String signature = hmacSha256(queryString, secret);
-        String url = "https://api.mexc.com" + endpoint + "?" + queryString + "&signature=" + signature;
-
-        // BotLogger.info("📡 CONECTANDO A MEXC... (" + url + ")"); <--- COMENTADO
-
-        Request request = new Request.Builder()
-                .url(url)
-                .header("X-MEXC-APIKEY", apiKey)
-                .header("Content-Type", "application/json")
-                .get()
-                .build();
-
-        try (Response response = client.newCall(request).execute()) {
-            if (!response.isSuccessful()) return -1.0;
-
-            // Leemos el body una sola vez
-            String rawBody = response.body().string();
-            // BotLogger.info("🔎 [MEXC RAW] " + coin + ": " + rawBody); <--- ¡SILENCIADO!
-
-            JsonNode root = mapper.readTree(rawBody);
-            if (root.isArray()) {
-                for (JsonNode asset : root) {
-                    if (asset.get("coin").asText().equalsIgnoreCase(coin)) {
-                        JsonNode networks = asset.get("networkList");
-                        if (networks != null && networks.isArray()) {
-                            for (JsonNode net : networks) {
-                                String netName = net.get("network").asText();
-                                // Buscamos la red que coincida con la moneda (ej. SOL)
-                                if (netName.contains(coin) || netName.equalsIgnoreCase(coin)) {
-                                    return net.get("withdrawFee").asDouble();
-                                }
-                            }
-                            if (networks.size() > 0) return networks.get(0).get("withdrawFee").asDouble();
-                        }
-                    }
-                }
-            }
-        }
-        return -1.0;
-    }
-
-    // ==========================================
-    // 🏛️ IMPLEMENTACIÓN KUCOIN (LIMPIA)
-    // ==========================================
-    private double getKucoinWithdrawFee(String coin) throws Exception {
-        // BotLogger.info("📡 CONECTANDO A KUCOIN..."); <--- COMENTADO
-
-        String url = "https://api.kucoin.com/api/v2/currencies/" + coin;
-        Request request = new Request.Builder().url(url).get().build();
-
-        try (Response response = client.newCall(request).execute()) {
-            if (!response.isSuccessful()) return -1.0;
-
-            String rawBody = response.body().string();
-            // BotLogger.info("🔎 [KUCOIN RAW] " + coin + ": " + rawBody); <--- ¡SILENCIADO!
-
-            JsonNode root = mapper.readTree(rawBody);
-            if (root.has("code") && root.get("code").asText().equals("200000")) {
-                JsonNode data = root.get("data");
-                if (data != null && data.has("chains")) {
-                    JsonNode chains = data.get("chains");
-                    double bestFee = 99999.0;
-                    boolean found = false;
-                    for (JsonNode chain : chains) {
-                        if (chain.has("isWithdrawEnabled") && chain.get("isWithdrawEnabled").asBoolean()) {
-                            double fee = chain.get("withdrawalMinFee").asDouble();
-                            if (fee < bestFee) {
-                                bestFee = fee;
-                                found = true;
-                            }
-                        }
-                    }
-                    if (found) return bestFee;
-                }
-            }
-        }
-        return -1.0;
-    }
     // =========================================================================
     // 🚀 6. BATCH FETCHING (OPTIMIZACIÓN SENIOR 10/10)
     // =========================================================================
-    /**
-     * Descarga TODOS los precios del exchange en 1 sola llamada HTTP.
-     * Reduce el estrés de la API y evita bloqueos por Rate Limit.
-     */
     public Map<String, Double> fetchAllPrices(String exchange) {
         Map<String, Double> marketPrices = new HashMap<>();
         String url = "";
 
         try {
             if (exchange.equalsIgnoreCase("binance") || exchange.equalsIgnoreCase("mexc")) {
-                // V3 Standard: Devuelve array [{symbol: "BTCUSDT", price: "90000"}, ...]
                 url = (exchange.equalsIgnoreCase("binance") ? BINANCE_URL : MEXC_URL) + "/api/v3/ticker/price";
 
                 Request request = new Request.Builder().url(url).get().build();
@@ -526,7 +569,6 @@ public class ExchangeConnector {
                     }
                 }
             } else if (exchange.toLowerCase().contains("bybit")) {
-                // Bybit V5: category=spot
                 url = BYBIT_URL + "/v5/market/tickers?category=spot";
                 Request request = new Request.Builder().url(url).get().build();
                 try (Response response = client.newCall(request).execute()) {
@@ -541,19 +583,18 @@ public class ExchangeConnector {
                     }
                 }
             } else if (exchange.equalsIgnoreCase("kucoin")) {
-                // Kucoin V1: /api/v1/market/allTickers
                 url = KUCOIN_URL + "/api/v1/market/allTickers";
                 Request request = new Request.Builder().url(url).get().build();
-                try (Response response = client.newCall(request).execute()) {
+                try (Response response = executeWithRetry(request)) {
                     if (response.isSuccessful()) {
                         JsonNode root = mapper.readTree(response.body().string());
                         if (root.has("data") && root.get("data").has("ticker")) {
                             JsonNode tickers = root.get("data").get("ticker");
                             for (JsonNode node : tickers) {
-                                // Kucoin usa guión (BTC-USDT), lo normalizamos a BTCUSDT para el mapa
                                 String symbol = node.get("symbol").asText().replace("-", "");
                                 double price = 0.0;
-                                if (node.has("last")) price = node.get("last").asDouble(); // A veces es 'last', a veces 'buy'
+                                if (node.has("last")) price = node.get("last").asDouble();
+                                else if (node.has("buy")) price = node.get("buy").asDouble();
                                 marketPrices.put(symbol, price);
                             }
                         }
@@ -564,5 +605,76 @@ public class ExchangeConnector {
             BotLogger.error("⚠️ Error Batch Fetch (" + exchange + "): " + e.getMessage());
         }
         return marketPrices;
+    }
+    // =========================================================================
+    // 🎯 2.6 PRECISIÓN QUIRÚRGICA (BID/ASK INSTANTÁNEO)
+    // =========================================================================
+
+    public double fetchBid(String exchange, String pair) {
+        // Pedimos profundidad mínima (limit=1) para ser ultra-rápidos
+        OrderBook book = fetchOrderBook(exchange, pair, 1);
+        if (book.bids() != null && !book.bids().isEmpty()) {
+            return book.bids().get(0)[0]; // El primer Bid es el más alto (mejor precio de venta para nosotros)
+        }
+        return fetchPrice(exchange, pair); // Fallback al Last Price si falla el libro
+    }
+
+    public double fetchAsk(String exchange, String pair) {
+        OrderBook book = fetchOrderBook(exchange, pair, 1);
+        if (book.asks() != null && !book.asks().isEmpty()) {
+            return book.asks().get(0)[0]; // El primer Ask es el más bajo (mejor precio de compra para nosotros)
+        }
+        return fetchPrice(exchange, pair); // Fallback
+    }
+    // =========================================================================
+    // 🛡️ NÚCLEO DE RESILIENCIA (MÉTODO PRIVADO NUEVO)
+    // =========================================================================
+    /**
+     * Envuelve la llamada de red con lógica de reintentos y espera exponencial.
+     * Maneja automáticamente errores 429 (Rate Limit) y 5xx.
+     */
+    private Response executeWithRetry(Request request) throws IOException {
+        int attempt = 0;
+        long backoff = INITIAL_BACKOFF_MS;
+        IOException lastException = null;
+
+        while (attempt < MAX_RETRIES) {
+            try {
+                // Intentamos ejecutar la llamada
+                Response response = client.newCall(request).execute();
+
+                // Si es exitoso (200) o un error de cliente definitivo (400, 404, etc. PERO NO 429)
+                // devolvemos la respuesta inmediatamente.
+                if (response.isSuccessful() || (response.code() >= 400 && response.code() != 429 && response.code() < 500)) {
+                    return response;
+                }
+
+                // Si llegamos aquí, es un error recuperable (429 Rate Limit o 5xx Server Error)
+                if (response.code() == 429) {
+                    BotLogger.warn("🚦 RATE LIMIT DETECTADO (" + request.url().host() + "). Enfriando motores...");
+                    backoff = 5000; // Castigo mayor (5s) si nos piden calmar
+                } else {
+                    BotLogger.warn("⚠️ Error Servidor " + response.code() + ". Reintentando...");
+                }
+
+                response.close(); // Cerramos para limpiar recursos antes de reintentar
+
+            } catch (IOException e) {
+                lastException = e;
+                BotLogger.warn("⚠️ Fallo de red (Intento " + (attempt + 1) + "/" + MAX_RETRIES + "): " + e.getMessage());
+            }
+
+            // Aumentamos contador y esperamos
+            attempt++;
+            try {
+                Thread.sleep(backoff);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Interrumpido durante backoff");
+            }
+            backoff *= 2; // Backoff Exponencial: 500ms -> 1s -> 2s
+        }
+
+        throw (lastException != null) ? lastException : new IOException("Max retries exceeded for " + request.url());
     }
 }
