@@ -45,7 +45,9 @@ public class DeepMarketScanner {
     // METRICS
     private final DoubleAdder totalPotentialProfit = new DoubleAdder();
     private final AtomicLong tradesCount = new AtomicLong(0);
-    private String bestOpportunityLog = "N/A";
+
+    private double maxProfitSeen = -999.0;
+    private String bestOpportunityLog = "Buscando...";
 
     // FORMATOS
     private final DecimalFormat dfMoney = new DecimalFormat("0.00");
@@ -237,6 +239,9 @@ public class DeepMarketScanner {
         // Visualización
         if (netProfit > BotConfig.MIN_PROFIT_THRESHOLD) {
 
+            // ✅ LLAMADA CRÍTICA: Registra la presa si es la mejor hasta ahora
+            updateBestOpportunity(exchange, asset, bridge, netProfit);
+
             printTriangularRow(exchange, asset, bridge, cap, grossGap, totalFees, netProfit);
 
             // Si no estamos en DryRun y hay ganancia (o es prueba de fuego), DISPARAMOS
@@ -247,7 +252,6 @@ public class DeepMarketScanner {
                 // Opcional: Apagar tras primer disparo para revisión de resultados
                 // System.exit(0);
             }
-
             // Actualización de métricas
             if (cap == (testCapitals.get(0))) {
                 totalPotentialProfit.add(netProfit);
@@ -306,27 +310,31 @@ public class DeepMarketScanner {
     }
 
     private void sendTelegramReport() {
-        String best = getBestOpportunityLog(); // El método que ya tienes para la mejor oportunidad
-        double totalNet = totalPotentialProfit.sum();
-        long count = tradesCount.get();
-
-        String msg = String.format(
-                "📊 *REPORTE DE OPERACIONES (5 min)*\n" +
-                        "━━━━━━━━━━━━━━━━━━\n" +
-                        "🛰️ Estado: %s\n" +
-                        "💰 Capital Test: $%.2f\n" +
-                        "🎯 Oportunidades: %d\n" +
-                        "💵 PnL Potencial: $%.4f\n\n" +
-                        "🔝 *MEJOR OPORTUNIDAD:*\n%s",
-                BotConfig.DRY_RUN ? "🧪 SIMULACIÓN" : "🔥 FUEGO REAL",
-                BotConfig.SEED_CAPITAL,
-                count,
-                totalNet,
-                best.isEmpty() ? "Buscando presas..." : best
-        );
-
-        BotLogger.sendTelegram(msg);
+        try {
+            String status = BotConfig.DRY_RUN ? "🧪 SIMULACIÓN" : "🔥 FUEGO REAL";
+            String msg = String.format(
+                    "📊 *INFORME DE CAZA (%d min)*\n" +
+                            "━━━━━━━━━━━━━━━━━━\n" +
+                            "🛰️ *Estado:* %s\n" +
+                            "💰 *Capital:* $%.2f\n" +
+                            "🎯 *Eventos:* %d\n" +
+                            "💵 *PnL Total:* $%.4f\n\n" +
+                            "🔝 *MEJOR PRESA:* \n`%s`",
+                    BotConfig.REPORT_INTERVAL_MIN, status, BotConfig.SEED_CAPITAL,
+                    tradesCount.get(), totalPotentialProfit.sum(), bestOpportunityLog
+            );
+            BotLogger.sendTelegram(msg);
+        } catch (Exception e) { BotLogger.error("Error Telegram: " + e.getMessage()); }
     }
+
+    private synchronized void updateBestOpportunity(String ex, String asset, String bridge, double profit) {
+        // Si el profit actual es el mejor visto hasta ahora, lo grabamos para Telegram
+        if (profit > maxProfitSeen) {
+            maxProfitSeen = profit;
+            bestOpportunityLog = String.format("[%s] %s-%s (Neto: $%.4f)", ex.toUpperCase(), asset, bridge, profit);
+        }
+    }
+
     private void finalizeScan() {
         scheduler.shutdown();
         virtualExecutor.shutdown();
