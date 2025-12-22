@@ -2,6 +2,7 @@ package com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.FeeManager;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.BotConfig;
 import com.rafaeldiaz.orquestador_gold_rush_2025.execution.TradeExecutor;
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 
@@ -30,8 +31,7 @@ public class DeepMarketScanner {
 
     // 🔧 CONFIGURACIÓN CIENTÍFICA
     // Simularemos todos estos escenarios simultáneamente con el mismo Order Book
-    private final List<Double> testCapitals = List.of(224.0, 500.0, 1000.0, 2000.0, 3000.0);
-    private boolean dryRun = true;
+    private final List<Double> testCapitals = List.of(BotConfig.SEED_CAPITAL);    private boolean dryRun = true;
 
     private final List<String> exchanges = List.of("binance", "bybit", "mexc", "kucoin");
 
@@ -56,6 +56,8 @@ public class DeepMarketScanner {
         this.connector = connector;
         this.feeManager = new FeeManager(connector);
         this.tradeExecutor = new TradeExecutor(connector, feeManager);
+        // El seguro ahora depende exclusivamente del .env
+        this.tradeExecutor.setDryRun(BotConfig.DRY_RUN);
     }
 
     public void setDryRun(boolean dryRun) {
@@ -69,16 +71,30 @@ public class DeepMarketScanner {
     public void startOmniScan(int durationMinutes) {
         BotLogger.info("⚡ INICIANDO DEEP SCAN: STRESS TEST MULTI-CAPITAL");
         BotLogger.info("🧪 Escenarios Activos: " + testCapitals);
+        BotLogger.info("🛡️ Modo Fuego Real: " + (!BotConfig.DRY_RUN ? "ACTIVADO 🔥" : "DESACTIVADO (Simulación)"));
 
         printHeader();
 
-        scheduler.scheduleAtFixedRate(this::sendTelegramReport, 5, 5, TimeUnit.MINUTES);
+        scheduler.scheduleAtFixedRate(
+                this::sendTelegramReport,
+                BotConfig.REPORT_INTERVAL_MIN,
+                BotConfig.REPORT_INTERVAL_MIN,
+                TimeUnit.MINUTES
+        );
 
         Thread.ofVirtual().start(() -> {
             long endTime = System.currentTimeMillis() + (durationMinutes * 60 * 1000L);
             while (System.currentTimeMillis() < endTime) {
+
+                // 1. Ejecutamos el escaneo batch que usted ya tiene
                 scanFullMatrixBatchOptimized();
-                try { Thread.sleep(3000); } catch (InterruptedException e) { break; }
+
+                try {
+                    // 2. 💉 AQUÍ INYECTAMOS EL DELAY DESDE EL CONFIG
+                    Thread.sleep(BotConfig.SCAN_DELAY);
+                } catch (InterruptedException e) {
+                    break;
+                }
             }
             finalizeScan();
         });
@@ -218,16 +234,24 @@ public class DeepMarketScanner {
         // GAP: Ganancia bruta antes de fees
         double grossGap = netProfit + totalFees;
 
-        // Visualización (Permisiva para ver datos)
-        if (netProfit > -2.5) {
+        // Visualización
+        if (netProfit > BotConfig.MIN_PROFIT_THRESHOLD) {
+
             printTriangularRow(exchange, asset, bridge, cap, grossGap, totalFees, netProfit);
 
-            if (netProfit > 0) {
-                // Solo sumamos al potencial si es ganancia real
-                if (cap == (testCapitals.get(0))) { // Sumamos solo el caso base para no duplicar metrics
-                    totalPotentialProfit.add(netProfit);
-                    tradesCount.incrementAndGet();
-                }
+            // Si no estamos en DryRun y hay ganancia (o es prueba de fuego), DISPARAMOS
+            if (!BotConfig.DRY_RUN && tradesCount.get() == 0) {
+                BotLogger.warn("🚀 OPORTUNIDAD REAL DETECTADA. EJECUTANDO...");
+                tradeExecutor.executeTriangular(exchange, asset, bridge, cap);
+
+                // Opcional: Apagar tras primer disparo para revisión de resultados
+                // System.exit(0);
+            }
+
+            // Actualización de métricas
+            if (cap == (testCapitals.get(0))) {
+                totalPotentialProfit.add(netProfit);
+                tradesCount.incrementAndGet();
             }
         }
     }
@@ -281,8 +305,28 @@ public class DeepMarketScanner {
         System.out.println("╠══════════╬════════╬═══════════════╬═══════╬════════╬════════╬════════╬════════════╣");
     }
 
-    private void sendTelegramReport() { /* ... */ }
+    private void sendTelegramReport() {
+        String best = getBestOpportunityLog(); // El método que ya tienes para la mejor oportunidad
+        double totalNet = totalPotentialProfit.sum();
+        long count = tradesCount.get();
 
+        String msg = String.format(
+                "📊 *REPORTE DE OPERACIONES (5 min)*\n" +
+                        "━━━━━━━━━━━━━━━━━━\n" +
+                        "🛰️ Estado: %s\n" +
+                        "💰 Capital Test: $%.2f\n" +
+                        "🎯 Oportunidades: %d\n" +
+                        "💵 PnL Potencial: $%.4f\n\n" +
+                        "🔝 *MEJOR OPORTUNIDAD:*\n%s",
+                BotConfig.DRY_RUN ? "🧪 SIMULACIÓN" : "🔥 FUEGO REAL",
+                BotConfig.SEED_CAPITAL,
+                count,
+                totalNet,
+                best.isEmpty() ? "Buscando presas..." : best
+        );
+
+        BotLogger.sendTelegram(msg);
+    }
     private void finalizeScan() {
         scheduler.shutdown();
         virtualExecutor.shutdown();
