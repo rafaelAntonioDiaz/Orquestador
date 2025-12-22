@@ -1,12 +1,10 @@
-package com.rafaeldiaz.orquestador_gold_rush_2025;
+package com.rafaeldiaz.orquestador_gold_rush_2025.core.main;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.*;
-import com.rafaeldiaz.orquestador_gold_rush_2025.core.ArbitrageDetector;
-import com.rafaeldiaz.orquestador_gold_rush_2025.core.DynamicPairSelector;
-import com.rafaeldiaz.orquestador_gold_rush_2025.core.GoldRushOrchestrator;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner.ArbitrageDetector;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner.DynamicPairSelector;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.FeeManager;
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
-
-import java.util.List;
 
 public class Main {
 
@@ -33,7 +31,8 @@ public class Main {
             // 4. INTELIGENCIA DE MERCADO (EL CEREBRO)
             // El selector analiza volatilidad y le dice al streamer qué mirar.
             // AHORA SÍ: 'streamer' implementa MarketListener, así que esto compila y funciona.
-            DynamicPairSelector selector = new DynamicPairSelector(connector, streamer);
+            FeeManager feeManager = new FeeManager(connector);
+            DynamicPairSelector selector = new DynamicPairSelector(connector, streamer, feeManager);
 
             // 5. INICIO DE SISTEMAS AUTÓNOMOS
             BotLogger.info("🧠 Iniciando Lóbulo Frontal (Selector Dinámico)...");

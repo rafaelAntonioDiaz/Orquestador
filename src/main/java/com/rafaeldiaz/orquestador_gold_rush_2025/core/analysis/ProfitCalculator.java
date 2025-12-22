@@ -1,7 +1,4 @@
-package com.rafaeldiaz.orquestador_gold_rush_2025.core;
-
-import java.math.BigDecimal;
-import java.math.RoundingMode;
+package com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis;
 
 /**
  * 🧮 PROFIT CALCULATOR (El Contador)

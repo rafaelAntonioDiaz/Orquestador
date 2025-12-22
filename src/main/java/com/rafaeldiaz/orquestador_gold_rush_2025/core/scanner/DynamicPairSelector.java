@@ -1,6 +1,7 @@
-package com.rafaeldiaz.orquestador_gold_rush_2025.core;
+package com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.FeeManager;
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 
 import java.util.*;
@@ -17,6 +18,7 @@ public class DynamicPairSelector {
 
     private final ExchangeConnector connector;
     private final MarketListener marketListener;
+    private final FeeManager feeManager;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     // ⚡ Executor de Hilos Virtuales para I/O masivo sin bloqueo
     private final ExecutorService virtualExecutor = Executors.newVirtualThreadPerTaskExecutor();
@@ -45,9 +47,10 @@ public class DynamicPairSelector {
     private static final double WEIGHT_ATR = 0.4;
     private static final double WEIGHT_SPREAD = 0.4;
 
-    public DynamicPairSelector(ExchangeConnector connector, MarketListener marketListener) {
+    public DynamicPairSelector(ExchangeConnector connector, MarketListener marketListener, FeeManager feeManager) {
         this.connector = connector;
         this.marketListener = marketListener;
+        this.feeManager = feeManager;
     }
 
     public void start() {
@@ -150,10 +153,15 @@ public class DynamicPairSelector {
             double bestAsk = book.asks().get(0)[0];
             double spreadPercent = ((bestAsk - bestBid) / bestBid) * 100.0;
 
-            // [NUEVO] Cálculo de Spread Neto (Quitando Fees)
-            double netSpread = spreadPercent - ESTIMATED_TOTAL_FEE_PERCENT;
+            // Consultamos el Fee REAL de Taker (Ya que el arbitraje agresivo suele ser Taker)
+            // Multiplicamos por 2 (Entrada + Salida estimada)
+            double realTakerFee = feeManager.getTradingFee(refExchange, pair, "TAKER");
+            double totalRealFeePercent = (realTakerFee * 2) * 100.0; // Convertir a porcentaje
 
-            // [NUEVO] FILTRO DE HIERRO: Si no hay ganancia neta > 0.5%, descartar par.
+            // Cálculo preciso
+            double netSpread = spreadPercent - totalRealFeePercent;
+
+            // [FILTRO DE HIERRO]
             if (netSpread < MIN_NET_SPREAD_PERCENT) {
                 return null;
             }

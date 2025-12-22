@@ -1,6 +1,7 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025.core;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.*;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.GoldRushOrchestrator;
 import org.junit.jupiter.api.Test;
 import java.util.List;
 

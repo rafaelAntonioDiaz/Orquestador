@@ -1,7 +1,7 @@
-package com.rafaeldiaz.orquestador_gold_rush_2025.core;
+package com.rafaeldiaz.orquestador_gold_rush_2025.utils;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
-import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.FeeManager;
 
 import java.text.DecimalFormat;
 

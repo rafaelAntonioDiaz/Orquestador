@@ -1,5 +1,7 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025.core;
 
+import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
+import com.rafaeldiaz.orquestador_gold_rush_2025.execution.CrossTradeExecutor;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -10,7 +12,7 @@ class CrossTradeExecutorTest {
     void testParallelExecution() {
         System.out.println("--- 🔫 TEST DE EJECUCIÓN PARALELA ---");
 
-        CrossTradeExecutor executor = new CrossTradeExecutor();
+        CrossTradeExecutor executor = new CrossTradeExecutor(new ExchangeConnector());
 
         // Simulamos una orden: Comprar en MEXC, Vender en Binance
         // Par: BTCUSDT, Precio Compra: 50000, Precio Venta: 51000

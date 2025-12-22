@@ -1,4 +1,4 @@
-package com.rafaeldiaz.orquestador_gold_rush_2025.core;
+package com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner;
 
 import java.util.List;
 

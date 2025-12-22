@@ -2,7 +2,7 @@ package com.rafaeldiaz.orquestador_gold_rush_2025.connect;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.rafaeldiaz.orquestador_gold_rush_2025.core.MarketListener; // <--- IMPORTACIÓN CRÍTICA
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner.MarketListener; // <--- IMPORTACIÓN CRÍTICA
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 import okhttp3.*;
 

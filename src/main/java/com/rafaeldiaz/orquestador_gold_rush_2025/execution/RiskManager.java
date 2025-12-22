@@ -1,4 +1,4 @@
-package com.rafaeldiaz.orquestador_gold_rush_2025.core;
+package com.rafaeldiaz.orquestador_gold_rush_2025.execution;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 import java.util.concurrent.atomic.AtomicInteger;

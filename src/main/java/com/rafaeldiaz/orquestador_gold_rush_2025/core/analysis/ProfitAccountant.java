@@ -1,12 +1,10 @@
-package com.rafaeldiaz.orquestador_gold_rush_2025.core;
+package com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 
 import java.io.*;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
-import java.util.List;
-import java.util.ArrayList;
 import java.util.Locale;
 
 /**

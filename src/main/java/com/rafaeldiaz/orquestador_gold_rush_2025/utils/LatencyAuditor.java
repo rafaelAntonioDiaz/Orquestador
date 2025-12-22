@@ -1,7 +1,7 @@
-package com.rafaeldiaz.orquestador_gold_rush_2025.core;
+package com.rafaeldiaz.orquestador_gold_rush_2025.utils;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
-import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
+
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;

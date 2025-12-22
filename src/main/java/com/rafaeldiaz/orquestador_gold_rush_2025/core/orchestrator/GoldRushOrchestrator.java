@@ -1,7 +1,13 @@
-package com.rafaeldiaz.orquestador_gold_rush_2025.core;
+package com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeStrategy;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner.MarketListener;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.FeeManager;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.ProfitCalculator;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner.DynamicPairSelector;
+import com.rafaeldiaz.orquestador_gold_rush_2025.execution.RiskManager;
+import com.rafaeldiaz.orquestador_gold_rush_2025.execution.TradeExecutor;
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 
 import java.time.LocalTime;
@@ -12,7 +18,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
- * 🎼 DIRECTOR DE ORQUESTA (VERSIÓN BLINDADA CON RISK MANAGER)
+ * 🎼 DIRECTOR DE ORQUESTA (VERSIÓN BLINDADA & SINCRONIZADA v2.0)
  */
 public class GoldRushOrchestrator implements MarketListener {
 
@@ -23,7 +29,7 @@ public class GoldRushOrchestrator implements MarketListener {
     private final FeeManager feeManager;
     private final ProfitCalculator profitCalculator;
     private final DynamicPairSelector pairSelector;
-    private final TradeExecutor executor; // <--- Necesitamos el Executor aquí
+    private final TradeExecutor executor; // <--- El Músculo
     private final RiskManager riskManager; // <--- El Gobernador
 
     private final List<String> activeTargets = new CopyOnWriteArrayList<>();
@@ -38,17 +44,19 @@ public class GoldRushOrchestrator implements MarketListener {
 
     public GoldRushOrchestrator(List<ExchangeStrategy> strategies, ExchangeConnector connector) {
         this.strategies = strategies;
-        this.feeManager = new FeeManager(connector);
-        this.profitCalculator = new ProfitCalculator();
 
-        // Inicializamos componentes críticos
+        // 1. Inicializamos FeeManager PRIMERO (Crítico para que no sea null)
+        this.feeManager = new FeeManager(connector);
+
+        this.profitCalculator = new ProfitCalculator();
         this.riskManager = new RiskManager(capital);
-        this.executor = new TradeExecutor(connector);
-        // Configurar DryRun según necesitemos (true = simulacro seguro)
+
+        // 2. Inicializamos Executor pasándole AMBOS componentes (Corrección aplicada)
+        this.executor = new TradeExecutor(connector, this.feeManager);
         this.executor.setDryRun(true);
 
-        this.pairSelector = new DynamicPairSelector(connector, this);
-        this.activeTargets.add("SOLUSDT"); // Target inicial
+        this.pairSelector = new DynamicPairSelector(connector, this, feeManager);
+        this.activeTargets.add("SOLUSDT");
     }
 
     @Override
@@ -69,10 +77,9 @@ public class GoldRushOrchestrator implements MarketListener {
 
     private void scanMarkets() {
         try {
-            // Verificar primero si el Gobernador permite operar
             if (!riskManager.canExecuteTrade()) {
                 BotLogger.warn("⛔ SISTEMA DETENIDO POR RISK MANAGER.");
-                return; // No gastamos recursos escaneando si no podemos disparar
+                return;
             }
 
             if (activeTargets.isEmpty()) return;
@@ -159,7 +166,7 @@ public class GoldRushOrchestrator implements MarketListener {
                     bestPairLog = String.format("[%s] %s->%s ($%.2f)", pair, source.exchange(), target.exchange(), netProfit);
                 }
 
-                if (netProfit > 0.05) { // Log solo si paga el café
+                if (netProfit > 0.05) {
                     logBatch.append(String.format(
                             "[%s] 💰 %-6s %-7s->%-7s | NETO:$%6.2f | ROI:%.2f%%\n",
                             time, pair, source.exchange(), target.exchange(), netProfit, result.roiPercent()
@@ -168,20 +175,17 @@ public class GoldRushOrchestrator implements MarketListener {
 
                 // 🔥 ZONA DE DISPARO 🔥
                 if (result.isProfitable()) {
-                    // 1. Preguntamos al Gobernador
                     if (riskManager.canExecuteTrade()) {
-                        BotLogger.warn("🚀 EJECUTANDO OPORTUNIDAD: " + pair + " (Neto: $" + netProfit + ")");
+                        BotLogger.warn("🚀 EJECUTANDO OPORTUNIDAD: " + pair + " (Neto Previsto: $" + netProfit + ")");
 
-                        // 2. Disparamos al Músculo (Ahora retorna el PnL real/simulado)
-                        // Calculamos la cantidad de asset basada en capital USDT
-                        double amountAsset = capital / buyPrice;
-
-                        double actualPnL = executor.executeSpatialArbitrage(
-                                asset, source.exchange(), target.exchange(), amountAsset
+                        // 2. Disparamos al Músculo
+                        // CORRECCIÓN: Llamada a void, sin asignación.
+                        executor.executeSpatialArbitrage(
+                                asset, source.exchange(), target.exchange(), capital
                         );
 
-                        // 3. Reportamos el resultado al Gobernador (Feedback Loop Cerrado)
-                        riskManager.reportTradeResult(actualPnL);
+                        // 3. Reportamos el resultado TEÓRICO al Gobernador (Simulación)
+                        riskManager.reportTradeResult(netProfit);
 
                     } else {
                         BotLogger.warn("⛔ OPORTUNIDAD RECHAZADA POR RISK MANAGER.");

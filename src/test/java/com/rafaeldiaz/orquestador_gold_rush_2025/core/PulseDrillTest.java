@@ -1,6 +1,7 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025.core;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner.DeepMarketScanner;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -24,6 +25,7 @@ public class PulseDrillTest {
     @DisplayName("🎯 LANZAMIENTO ÉPICO: Deep Scan 15 Minutos")
     void runPulseDrill() throws InterruptedException {
         // 1. Inicializamos la máquina
+        System.out.println("🛰️ Escaneando el multiverso cripto... Observa la consola y siente la caza.\n");
         ExchangeConnector connector = new ExchangeConnector();
         DeepMarketScanner scanner = new DeepMarketScanner(connector);
 
@@ -38,7 +40,7 @@ public class PulseDrillTest {
         // 4. ENCENDEMOS EL OJO QUE TODO LO VE
         scanner.startOmniScan(15);
 
-        System.out.println("🛰️ Escaneando el multiverso cripto... Observa la consola y siente la caza.\n");
+
 
         // 5. Mantener vivo el test (16 min margen)
         Thread.sleep(16 * 60 * 1000);

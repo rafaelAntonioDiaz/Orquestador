@@ -1,9 +1,9 @@
-package com.rafaeldiaz.orquestador_gold_rush_2025.core;
+package com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.ProfitAccountant;
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 
-import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.Executors;
