@@ -2,6 +2,7 @@ package com.rafaeldiaz.orquestador_gold_rush_2025.connect;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.BotConfig;
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 import io.github.cdimascio.dotenv.Dotenv;
 import okhttp3.*;
@@ -23,6 +24,7 @@ public class ExchangeConnector {
     // 📦 ESTRUCTURA DE DATOS PARA EL LIBRO DE ÓRDENES (NUEVO FASE 2)
     public record OrderBook(List<double[]> bids, List<double[]> asks) {}
 
+    private final Map<String, Long> exchangeRTT = new ConcurrentHashMap<>();
     private final OkHttpClient client;
     private final ObjectMapper mapper;
     private final EnvProvider envProvider;
@@ -213,6 +215,7 @@ public class ExchangeConnector {
         return new com.rafaeldiaz.orquestador_gold_rush_2025.model.OrderResult(
                 orderId, "UNKNOWN", 0, 0, 0, "NONE");
     }
+
     public Request buildOrderRequest(String exchange, String pair, String side, String type, double qty, double price) {
         if (exchange.startsWith("bybit")) {
             String sideCap = side.equalsIgnoreCase("BUY") ? "Buy" : "Sell";
@@ -251,7 +254,7 @@ public class ExchangeConnector {
     }
 
     // =========================================================================
-    // 📖 2.5 VISIÓN DE RAYOS X (ORDER BOOK) - FASE 2 [NUEVO]
+    // 📖 2.5 VISIÓN DE RAYOS X (ORDER BOOK)
     // =========================================================================
     /**
      * Descarga la profundidad del mercado (Bids y Asks) para calcular Slippage.
@@ -658,7 +661,7 @@ public class ExchangeConnector {
     }
 
     // =========================================================================
-    // 🔐 5. FIRMA CRIPTOGRÁFICA
+    // 🔐  FIRMA CRIPTOGRÁFICA
     // =========================================================================
     public Request buildSignedRequest(String exchange, String method, String endpoint, String jsonPayload) {
         String apiKey = getApiKey(exchange);
@@ -762,7 +765,7 @@ public class ExchangeConnector {
     }
 
     // =========================================================================
-    // 🚀 6. BATCH FETCHING (OPTIMIZACIÓN SENIOR 10/10)
+    // 🚀 BATCH FETCHING (OPTIMIZACIÓN SENIOR 10/10)
     // =========================================================================
     public Map<String, Double> fetchAllPrices(String exchange) {
         Map<String, Double> marketPrices = new HashMap<>();
@@ -849,38 +852,44 @@ public class ExchangeConnector {
      * Maneja automáticamente errores 429 (Rate Limit) y 5xx.
      */
     private Response executeWithRetry(Request request) throws IOException {
-        int attempt = 0;
-        long backoff = INITIAL_BACKOFF_MS;
-        IOException lastException = null;
+     int attempt = 0;
+     long backoff = INITIAL_BACKOFF_MS;
+     IOException lastException = null;
 
-        while (attempt < MAX_RETRIES) {
-            try {
-                // Intentamos ejecutar la llamada
+     while (attempt < MAX_RETRIES) {
+              // 🔥 CRONÓMETRO DE INICIO
+             long startTime = System.currentTimeMillis();
+
+             try {
                 Response response = client.newCall(request).execute();
 
-                // Si es exitoso (200) o un error de cliente definitivo (400, 404, etc. PERO NO 429)
-                // devolvemos la respuesta inmediatamente.
+                          // 🔥 CÁLCULO DE RTT (Ida y Vuelta)
+                long rtt = System.currentTimeMillis() - startTime;
+                String host = request.url().host();
+                          // Identificamos el exchange por el host y guardamos la latencia
+                if (host.contains("binance")) exchangeRTT.put("binance", rtt);
+                          else if (host.contains("bybit")) exchangeRTT.put("bybit", rtt);
+                          else if (host.contains("mexc")) exchangeRTT.put("mexc", rtt);
+                          else if (host.contains("kucoin")) exchangeRTT.put("kucoin", rtt);
                 if (response.isSuccessful() || (response.code() >= 400 && response.code() != 429 && response.code() < 500)) {
-                    return response;
+                        exchangeRTT.put(host.split("\\.")[0], rtt);
+                return response;
                 }
-
-                // Si llegamos aquí, es un error recuperable (429 Rate Limit o 5xx Server Error)
+                    // Si llegamos aquí, es un error recuperable (429 Rate Limit o 5xx Server Error)
                 if (response.code() == 429) {
                     BotLogger.warn("🚦 RATE LIMIT DETECTADO (" + request.url().host() + "). Enfriando motores...");
                     backoff = 5000; // Castigo mayor (5s) si nos piden calmar
                 } else {
                     BotLogger.warn("⚠️ Error Servidor " + response.code() + ". Reintentando...");
                 }
-
-                response.close(); // Cerramos para limpiar recursos antes de reintentar
+                    response.close(); // Cerramos para limpiar recursos antes de reintentar
 
             } catch (IOException e) {
-                lastException = e;
-                BotLogger.warn("⚠️ Fallo de red (Intento " + (attempt + 1) + "/" + MAX_RETRIES + "): " + e.getMessage());
-            }
-
-            // Aumentamos contador y esperamos
-            attempt++;
+                 lastException = e;
+                 BotLogger.warn("⚠️ Fallo de red (Intento " + (attempt + 1) + "/" + MAX_RETRIES + "): " + e.getMessage());
+             }
+             // Aumentamos contador y esperamos
+             attempt++;
             try {
                 Thread.sleep(backoff);
             } catch (InterruptedException e) {
@@ -889,29 +898,20 @@ public class ExchangeConnector {
             }
             backoff *= 2; // Backoff Exponencial: 500ms -> 1s -> 2s
         }
-
-        throw (lastException != null) ? lastException : new IOException("Max retries exceeded for " + request.url());
+         throw (lastException != null) ? lastException : new IOException("Max retries exceeded for " + request.url());
     }
-// =========================================================================
-    // 📏 7. NORMALIZACIÓN DE ÓRDENES (LOT SIZE & PRECISION) - FASE A
+
     // =========================================================================
-
-
+    // 📏 7. NORMALIZACIÓN DE ÓRDENES (CALIBRADO PARA BYBIT V5 SPOT)
+    // =========================================================================
     /**
      * Obtiene el "Paso Mínimo" de cantidad permitido por el exchange.
      * Ej: Para BTCUSDT en Binance es 0.00001.
      * Si intentas comprar 0.000015, te rechazará. Debes enviar 0.00001 o 0.00002.
      */
-// =========================================================================
-    // 📏 7. NORMALIZACIÓN DE ÓRDENES (LOT SIZE & PRECISION) - VERSIÓN CORREGIDA
-    // =========================================================================
-
     // Caché en memoria
     private final Map<String, Double> stepSizeCache = new ConcurrentHashMap<>();
 
-    // =========================================================================
-    // 📏 7. NORMALIZACIÓN DE ÓRDENES (CALIBRADO PARA BYBIT V5 SPOT)
-    // =========================================================================
     public double getStepSize(String exchange, String pair) {
         String key = exchange + "_" + pair;
         if (stepSizeCache.containsKey(key)) return stepSizeCache.get(key);
@@ -922,10 +922,15 @@ public class ExchangeConnector {
             String cleanPair = pair.replace("-", "").toUpperCase();
             String url = "";
 
-            if (exchange.equalsIgnoreCase("binance")) url = BINANCE_URL + "/api/v3/exchangeInfo?symbol=" + cleanPair;
-            else if (exchange.equalsIgnoreCase("mexc")) url = MEXC_URL + "/api/v3/exchangeInfo?symbol=" + cleanPair;
-            else if (exchange.toLowerCase().contains("bybit")) url = BYBIT_URL + "/v5/market/instruments-info?category=spot&symbol=" + cleanPair;
-            else if (exchange.equalsIgnoreCase("kucoin")) url = KUCOIN_URL + "/api/v2/symbols/" + (pair.contains("-") ? pair : pair.replace("USDT", "-USDT"));
+            if (exchange.equalsIgnoreCase("binance")) url = BINANCE_URL
+                    + "/api/v3/exchangeInfo?symbol=" + cleanPair;
+            else if (exchange.equalsIgnoreCase("mexc")) url = MEXC_URL
+                    + "/api/v3/exchangeInfo?symbol=" + cleanPair;
+            else if (exchange.toLowerCase().contains("bybit")) url = BYBIT_URL
+                    + "/v5/market/instruments-info?category=spot&symbol=" + cleanPair;
+            else if (exchange.equalsIgnoreCase("kucoin")) url = KUCOIN_URL
+                    + "/api/v2/symbols/" + (pair.contains("-") ? pair
+                    : pair.replace("USDT", "-USDT"));
 
             Request request = new Request.Builder().url(url).get().build();
 
@@ -934,7 +939,8 @@ public class ExchangeConnector {
                     JsonNode root = mapper.readTree(response.body().string());
 
                     // --- BINANCE / MEXC ---
-                    if (exchange.equalsIgnoreCase("binance") || exchange.equalsIgnoreCase("mexc")) {
+                    if (exchange.equalsIgnoreCase("binance")
+                            || exchange.equalsIgnoreCase("mexc")) {
                         JsonNode symbols = root.get("symbols");
                         if (symbols != null && !symbols.isEmpty()) {
                             for (JsonNode f : symbols.get(0).get("filters")) {
@@ -977,14 +983,19 @@ public class ExchangeConnector {
                         }
                     }
 
-                    BotLogger.info("📏 StepSize para " + pair + " en " + exchange + ": " + String.format("%.8f", stepSize));
+                    BotLogger.info("📏 StepSize para " + pair
+                            + " en " + exchange + ": " + String.format("%.8f", stepSize));
                     stepSizeCache.put(key, stepSize);
                     return stepSize;
                 }
             }
         } catch (Exception e) {
-            BotLogger.warn("⚠️ Error fetch stepSize " + key + ": " + e.getMessage() + ". Usando Default 0.01");
+            BotLogger.warn("⚠️ Error fetch stepSize "
+                    + key + ": " + e.getMessage() + ". Usando Default 0.01");
         }
         return 0.01;
+    }
+    public long getRTT(String exchange) {
+        return exchangeRTT.getOrDefault(exchange.toLowerCase(), -1L);
     }
 }

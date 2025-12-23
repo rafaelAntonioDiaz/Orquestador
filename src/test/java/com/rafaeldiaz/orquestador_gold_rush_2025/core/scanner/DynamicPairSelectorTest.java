@@ -1,9 +1,7 @@
-package com.rafaeldiaz.orquestador_gold_rush_2025.core;
+package com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.FeeManager;
-import com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner.DynamicPairSelector;
-import com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner.MarketListener;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

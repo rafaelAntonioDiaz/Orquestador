@@ -2,6 +2,7 @@ package com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.FeeManager;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.BotConfig;
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 
 import java.util.*;
@@ -23,10 +24,6 @@ public class DynamicPairSelector {
     // ⚡ Executor de Hilos Virtuales para I/O masivo sin bloqueo
     private final ExecutorService virtualExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private static final double WEIGHT_LIQUIDITY = 0.2;
-
-    // [NUEVO] 🛡️ REGLA DE ORO DEL ADVISOR
-    private static final double MIN_NET_SPREAD_PERCENT = 0.5;
-    private static final double ESTIMATED_TOTAL_FEE_PERCENT = 0.2;
 
     // 🌌 UNIVERSO EXPANDIDO (CANDIDATE PAIRS)
     // Lista amplia para filtrar. En el futuro, esto podría venir de un fetch "All Tickers".
@@ -127,9 +124,9 @@ public class DynamicPairSelector {
      */
     private OpportunityScore calculateScore(String pair) {
         try {
-            String refExchange = "bybit_sub1";
+            String refExchange = BotConfig.ADVISOR_REF_EXCHANGE;    // exchange de referencia
 
-            // 1. VOLATILIDAD (ATR) - Se mantiene igual
+            // 1. VOLATILIDAD (ATR)
             List<double[]> candles = connector.fetchCandles(refExchange, pair, "1", 5);
             if (candles == null || candles.isEmpty()) return null;
 
@@ -160,12 +157,6 @@ public class DynamicPairSelector {
 
             // Cálculo preciso
             double netSpread = spreadPercent - totalRealFeePercent;
-
-            // [FILTRO DE HIERRO]
-            if (netSpread < MIN_NET_SPREAD_PERCENT) {
-                return null;
-            }
-
             // B. Liquidez (Depth USD sum bids/asks)
             // Sumamos cuánto dinero hay disponible para comprar/vender en los primeros niveles
             double liquidityUSD = 0.0;

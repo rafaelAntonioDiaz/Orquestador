@@ -1,6 +1,5 @@
-package com.rafaeldiaz.orquestador_gold_rush_2025.core;
+package com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis;
 
-import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.ProfitAccountant;
 import org.junit.jupiter.api.Test;
 import java.io.File;
 import java.io.IOException;

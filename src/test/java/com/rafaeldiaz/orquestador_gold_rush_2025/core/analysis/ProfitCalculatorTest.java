@@ -1,6 +1,5 @@
-package com.rafaeldiaz.orquestador_gold_rush_2025.core;
+package com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis;
 
-import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.ProfitCalculator;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
