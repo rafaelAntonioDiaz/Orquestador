@@ -68,4 +68,15 @@ public class BotConfig {
     // Para el ESCÁNER (Ejecutor): ¿Qué triangulación da dinero?
     //  Usamos "MIN_SCAN_SPREAD" del .env
     public static final double MIN_SCAN_SPREAD = Double.parseDouble(dotenv.get("MIN_SCAN_SPREAD", "0.0005"));
+    // ✅ CONFIGURACIÓN DE ESTRATEGIA
+    public static final String STRATEGY_TYPE = dotenv.get("STRATEGY_TYPE", "SPATIAL");
+
+    // ✅ CONFIGURACIÓN DEL FILTRO DE TENDENCIA
+    public static final int TREND_EMA_PERIOD = Integer.parseInt(dotenv.get("TREND_EMA_PERIOD", "50"));
+    public static final String TREND_TIMEFRAME = dotenv.get("TREND_TIMEFRAME", "15m");
+
+    // Método auxiliar para saber fácil si es Espacial
+    public static boolean isSpatialStrategy() {
+        return "SPATIAL".equalsIgnoreCase(STRATEGY_TYPE);
+    }
 }

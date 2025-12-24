@@ -1,6 +1,7 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025.execution;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.BotConfig;
 import com.rafaeldiaz.orquestador_gold_rush_2025.model.OrderResult;
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 
@@ -14,10 +15,12 @@ public class CrossTradeExecutor {
 
     private final ExchangeConnector connector;
     private boolean dryRun = true;
+    private final RiskManager riskManager;
 
     // Constructor que recibe el conector (Inyección de Dependencia correcta)
-    public CrossTradeExecutor(ExchangeConnector connector) {
+    public CrossTradeExecutor(ExchangeConnector connector, RiskManager riskManager) {
         this.connector = connector;
+        this.riskManager = riskManager;
     }
 
     public void setDryRun(boolean dryRun) {
@@ -29,6 +32,12 @@ public class CrossTradeExecutor {
      * Ejecuta la maniobra "Pinza" simultánea y maneja fallos parciales.
      */
     public void executeCrossTrade(String buyExchange, String sellExchange, String pair, double buyPrice, double sellPrice) {
+        // 🛑 1. CHECK DE RIESGO (Antes de pensar en disparar)
+        if (!riskManager.canExecuteTrade()) {
+            BotLogger.warn("🚫 EJECUCIÓN ABORTADA: RiskManager bloqueó la operación.");
+            return;
+        }
+
         if (dryRun) {
             BotLogger.info("[DRY-RUN] Simulación Cross-Exchange " + pair + " exitosa.");
             return;
@@ -36,8 +45,9 @@ public class CrossTradeExecutor {
 
         BotLogger.info(String.format("⚡ EJECUTANDO CROSS: Compra %s | Venta %s", buyExchange, sellExchange));
 
-        // 1. Cálculo de Cantidad (Usar capital seguro o dinámico)
-        double tradeAmountUSDT = 20.0; // MVP: $20 por tiro
+        // 💰 2. CAPITAL DINÁMICO (Corregido)
+        double tradeAmountUSDT = BotConfig.SEED_CAPITAL; // Ahora usa los $75 del .env
+
         double rawQty = tradeAmountUSDT / buyPrice;
 
         // Normalización usando la nueva inteligencia del conector
@@ -76,18 +86,11 @@ public class CrossTradeExecutor {
         boolean buyOk = (buyResult != null && buyResult.isFilled());
         boolean sellOk = (sellResult != null && sellResult.isFilled());
 
+        // 🔍 3. REPORTE POST-OPERACIÓN AL RISK MANAGER
         if (buyOk && sellOk) {
-            // ÉXITO TOTAL
-            BotLogger.info("✅✅ CROSS TRADE PERFECTO. IDs: " + buyResult.orderId() + " / " + sellResult.orderId());
-            BotLogger.sendTelegram("✅ WIN! Arbitraje " + pair + " completado.");
-
-        } else if (!buyOk && !sellOk) {
-            // FALLO TOTAL (Nada pasó)
-            BotLogger.warn("❌❌ Ambas órdenes fallaron. Capital seguro.");
-
-        } else {
-            // 🚨 PELIGRO: EJECUCIÓN PARCIAL
-            handlePartialFailure(buyExchange, buyResult, sellExchange, sellResult, pair, qty);
+            // Calcular PnL real aproximado (o exacto si OrderResult lo trae)
+            double pnlEstimado = (sellResult.executedQty() * sellResult.averagePrice()) - (buyResult.executedQty() * buyResult.averagePrice());
+            riskManager.reportTradeResult(pnlEstimado); // ✅ Reportamos ganancia/pérdida
         }
     }
 

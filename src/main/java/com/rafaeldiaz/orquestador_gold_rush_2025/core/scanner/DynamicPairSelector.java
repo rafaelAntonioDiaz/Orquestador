@@ -125,8 +125,27 @@ public class DynamicPairSelector {
     private OpportunityScore calculateScore(String pair) {
         try {
             String refExchange = BotConfig.ADVISOR_REF_EXCHANGE;    // exchange de referencia
+            // ============================================================
+            // 1.  FILTRO DE TENDENCIA (Gatekeeper)
+            // ============================================================
+            if (BotConfig.isSpatialStrategy()) { // Solo activamos esto en modo ESPACIAL
+                double currentEMA = calculateTrendEMA(pair);
 
-            // 1. VOLATILIDAD (ATR)
+                // Obtenemos precio actual rápido (usamos el ticker o la última vela)
+                // Para ser precisos, usamos el último precio conocido del cálculo EMA o fetch rápido
+                Map<String, Double> prices = connector.fetchAllPrices(refExchange); // O fetchTicker si es más ligero
+                Double currentPrice = prices.get(pair);
+
+                if (currentPrice != null && currentEMA > 0) {
+                    if (currentPrice < currentEMA) {
+                        // ⛔ PRECIO BAJO LA EMA -> TENDENCIA BAJISTA -> RECHAZAR
+                        // BotLogger.debug("📉 Rechazo por Tendencia: " + pair + " ($" + currentPrice + " < EMA $" + String.format("%.4f", currentEMA) + ")");
+                        return null;
+                    }
+                }
+            }
+            // ============================================================
+            // 2.  VOLATILIDAD (ATR)
             List<double[]> candles = connector.fetchCandles(refExchange, pair, "1", 5);
             if (candles == null || candles.isEmpty()) return null;
 
@@ -137,7 +156,7 @@ public class DynamicPairSelector {
             double atrRaw = atrSum / candles.size();
             double atrPercent = (atrRaw / lastPrice) * 100.0;
 
-            // 2. PROFUNDIDAD REAL (Advisor: "fetch order book bid/ask avg, liquidity sum")
+            //  3. PROFUNDIDAD REAL (Advisor: "fetch order book bid/ask avg, liquidity sum")
             // Pedimos profundidad 10 para evaluar liquidez cercana
             ExchangeConnector.OrderBook book = connector.fetchOrderBook(refExchange, pair, 10);
 
@@ -163,7 +182,7 @@ public class DynamicPairSelector {
             for (double[] b : book.bids()) liquidityUSD += (b[0] * b[1]); // Precio * Cantidad
             for (double[] a : book.asks()) liquidityUSD += (a[0] * a[1]);
 
-            // 3. SCORING MULTI-FACTOR
+            // 4. SCORING MULTI-FACTOR
 
             // Factor Liquidez: Normalizamos.
             // Si hay > $500k USD en el libro (top 10), es liquidez perfecta (Score 1.0).
@@ -209,4 +228,57 @@ public class DynamicPairSelector {
 
     // Record interno para pasar datos
     private record OpportunityScore(String pair, double score, double atrPercent, double spreadPercent) {}
+    /**
+     * 📉 MOTOR DE TENDENCIA
+     * Calcula la EMA (Exponential Moving Average) para determinar la salud del activo.
+     * Retorna:
+     * > 0 : El valor de la EMA (Tendencia calculada).
+     * -1  : Error o datos insuficientes.
+     */
+    private double calculateTrendEMA(String pair) {
+        try {
+            int period = BotConfig.TREND_EMA_PERIOD; // 50
+            String timeframe = BotConfig.TREND_TIMEFRAME; // 15m
+
+            // 1. Pedimos datos históricos (Periodo + 20 velas de colchón para suavizar el inicio)
+            List<double[]> candles = connector.fetchCandles(BotConfig.ADVISOR_REF_EXCHANGE, pair, timeframe, period + 20);
+
+            if (candles == null || candles.size() < period) {
+                return -1; // No hay suficientes datos para decidir
+            }
+
+            // 2. Extraemos precios de CIERRE (Asumiendo formato estándar OHLCV: [4] = Close)
+            // NOTA: Si su conector usa otro índice para el precio de cierre, ajústelo aquí.
+            List<Double> closes = new ArrayList<>();
+            for (double[] c : candles) {
+                // Verifique en su ExchangeConnector qué índice es el precio de cierre.
+                // Usualmente: 0=Time, 1=Open, 2=High, 3=Low, 4=Close
+                if (c.length > 4) closes.add(c[4]);
+                else closes.add(c[2]); // Fallback si usa formato corto [High, Low, Close]
+            }
+
+            // 3. Cálculo Matemático de la EMA
+            // A. Primero SMA (Promedio Simple) de los primeros N elementos
+            double sum = 0;
+            for (int i = 0; i < period; i++) {
+                sum += closes.get(i);
+            }
+            double ema = sum / period;
+
+            // B. Multiplicador de Peso (K)
+            double multiplier = 2.0 / (period + 1);
+
+            // C. Proyectar la EMA sobre el resto de datos hasta hoy
+            for (int i = period; i < closes.size(); i++) {
+                double price = closes.get(i);
+                ema = ((price - ema) * multiplier) + ema;
+            }
+
+            return ema;
+
+        } catch (Exception e) {
+            BotLogger.warn("⚠️ Error calculando EMA para " + pair + ": " + e.getMessage());
+            return -1;
+        }
+    }
 }

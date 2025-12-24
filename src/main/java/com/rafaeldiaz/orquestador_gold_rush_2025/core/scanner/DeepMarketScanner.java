@@ -3,6 +3,8 @@ package com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner;
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.FeeManager;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.BotConfig;
+import com.rafaeldiaz.orquestador_gold_rush_2025.execution.CrossTradeExecutor;
+import com.rafaeldiaz.orquestador_gold_rush_2025.execution.RiskManager;
 import com.rafaeldiaz.orquestador_gold_rush_2025.execution.TradeExecutor;
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 
@@ -23,8 +25,8 @@ public class DeepMarketScanner implements MarketListener {
 
     private final ExchangeConnector connector;
     private final FeeManager feeManager;
-    private final TradeExecutor tradeExecutor;
-
+    // El Ejecutor Espacial
+    private final CrossTradeExecutor crossExecutor;
     private static final boolean AUTO_EXECUTE_ENABLED = false;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     private final ExecutorService virtualExecutor = Executors.newVirtualThreadPerTaskExecutor();
@@ -60,17 +62,31 @@ public class DeepMarketScanner implements MarketListener {
     public DeepMarketScanner(ExchangeConnector connector) {
         this.connector = connector;
         this.feeManager = new FeeManager(connector);
-        this.tradeExecutor = new TradeExecutor(connector, feeManager);
         this.pairSelector = new DynamicPairSelector(connector, this, feeManager);
-        // El seguro ahora depende exclusivamente del .env
-        this.tradeExecutor.setDryRun(BotConfig.DRY_RUN);
-        // ✅ COHERENCIA TOTAL (.ENV + SEED)
-        // Usamos la lista del .env y le agregamos el capital semilla
+
+        // this.tradeExecutor = new TradeExecutor(connector, feeManager); // <--- COMENTADO (Legacy)
+
+        // ============================================================
+        // 🛡️ ARQUITECTURA DE EJECUCIÓN ESPACIAL (CORREGIDA)
+        // ============================================================
+
+        // 1. Instanciamos al "Gobernador" (Risk Manager) PRIMERO
+        RiskManager riskPolice = new RiskManager(BotConfig.SEED_CAPITAL);
+
+        // 2. Instanciamos el Ejecutor inyectándole el Gobernador (Constructor de 2 args)
+        this.crossExecutor = new CrossTradeExecutor(connector, riskPolice);
+
+        // 3. Configuración de Seguridad
+        this.crossExecutor.setDryRun(BotConfig.DRY_RUN);
+
+        // ============================================================
+
+        // Carga de capitales de test para la simulación de Stress
         Set<Double> capitalSet = new TreeSet<>(BotConfig.TEST_CAPITALS);
         capitalSet.add(BotConfig.SEED_CAPITAL);
-
         this.testCapitals = new ArrayList<>(capitalSet);
     }
+
 
     public void setDryRun(boolean dryRun) {
         this.dryRun = dryRun;
@@ -141,26 +157,151 @@ public class DeepMarketScanner implements MarketListener {
 
     private void analyzeAssetInMemory(String asset, Map<String, Map<String, Double>> marketData) {
         String pair = asset + "USDT";
-        for (String buyEx : exchanges) {
-            // 🔄 TRIANGULAR STRESS TEST
-            if (marketData.containsKey(buyEx)) {
-                analyzeTriangularLoop(buyEx, asset, marketData.get(buyEx));
-            }
 
-            // 🌍 ESPACIAL (Mantenemos lógica base, pero el foco hoy es Triangular)
-            for (String sellEx : exchanges) {
-                if (buyEx.equals(sellEx)) continue;
-                double buyPrice = marketData.getOrDefault(buyEx, Map.of()).getOrDefault(pair, -1.0);
-                double sellPrice = marketData.getOrDefault(sellEx, Map.of()).getOrDefault(pair, -1.0);
-
-                if (buyPrice > 0 && sellPrice > 0) {
-                    // Usamos capital base para espacial por ahora
-                    calculateOpportunity(asset, buyEx, sellEx, buyPrice, sellPrice);
+        // Si estamos en modo ESPACIAL (Binance vs Bybit)
+        if (BotConfig.isSpatialStrategy()) {
+            analyzeSpatialSpread(asset, marketData);
+        }
+        // Si estamos en modo TRIANGULAR (Legacy)
+        else {
+            for (String buyEx : exchanges) {
+                if (marketData.containsKey(buyEx)) {
+                    analyzeTriangularLoop(buyEx, asset, marketData.get(buyEx));
                 }
             }
         }
     }
+    // 🌍 LÓGICA DE DETECCIÓN ESPACIAL (NUEVO MOTOR)
+    private void analyzeSpatialSpread(String asset, Map<String, Map<String, Double>> marketData) {
+        String pair = asset + "USDT";
 
+        String bestBuyEx = null;
+        double minAsk = Double.MAX_VALUE;
+
+        String bestSellEx = null;
+        double maxBid = -1.0;
+
+        // 1. Barrido: Buscar precio mínimo (Ask) y máximo (Bid)
+        for (String ex : exchanges) {
+            Map<String, Double> prices = marketData.get(ex);
+            if (prices == null || !prices.containsKey(pair)) continue;
+
+            double price = prices.get(pair); // Precio medio o ticker
+
+            // Simulamos Ask/Bid con un spread teórico pequeño si no tenemos el libro aun
+            // (Para detección rápida usamos el mismo precio, refinamos luego con OrderBook)
+            double estimatedAsk = price;
+            double estimatedBid = price;
+
+            if (estimatedAsk < minAsk) {
+                minAsk = estimatedAsk;
+                bestBuyEx = ex;
+            }
+            if (estimatedBid > maxBid) {
+                maxBid = estimatedBid;
+                bestSellEx = ex;
+            }
+        }
+
+        // 2. Validación Básica
+        if (bestBuyEx != null && bestSellEx != null && !bestBuyEx.equals(bestSellEx)) {
+            // Diferencia Bruta
+            double spread = (maxBid - minAsk) / minAsk;
+
+            // Filtro Rápido (.env) - Si la diferencia bruta promete, profundizamos
+            if (spread > BotConfig.MIN_SCAN_SPREAD) {
+                validateSpatialOpportunity(asset, bestBuyEx, bestSellEx, minAsk);
+            }
+        }
+    }
+    // 🧪 VALIDACIÓN CIENTÍFICA ESPACIAL
+    private void validateSpatialOpportunity(String asset, String buyEx, String sellEx, double basePrice) {
+        try {
+            String pair = asset + "USDT";
+
+            // 1. Descarga Pesada: Order Books Reales (Profundidad 20 para aguantar capital)
+            ExchangeConnector.OrderBook bookBuy = connector.fetchOrderBook(buyEx, pair, 20);
+            ExchangeConnector.OrderBook bookSell = connector.fetchOrderBook(sellEx, pair, 20);
+
+            if (bookBuy == null || bookSell == null) return;
+
+            // 2. Stress Test con Capitales (.env)
+            for (Double testCap : testCapitals) {
+                simulateSpatialScenario(asset, buyEx, sellEx, testCap, bookBuy, bookSell, basePrice);
+            }
+
+        } catch (Exception e) { /* Silent fail */ }
+    }
+
+    // 🧠 MOTOR DE SIMULACIÓN ESPACIAL
+    private void simulateSpatialScenario(String asset, String buyEx, String sellEx, double cap,
+                                         ExchangeConnector.OrderBook bookBuy, ExchangeConnector.OrderBook bookSell, double tickerPrice) {
+
+        // A. Latencia (Chequeamos ambos)
+        long rttA = connector.getRTT(buyEx);
+        long rttB = connector.getRTT(sellEx);
+        if (rttA > BotConfig.MAX_LATENCY_MS || rttB > BotConfig.MAX_LATENCY_MS) {
+            rejectionReasons.computeIfAbsent("LATENCIA_ALTA", k -> new AtomicLong()).incrementAndGet();
+            return;
+        }
+
+        // B. Compra en Exchange A (Ask)
+        double qtyAsset = cap / tickerPrice; // Cantidad base
+        double realBuyPrice = connector.calculateWeightedPrice(bookBuy, "BUY", qtyAsset);
+
+        // Slippage Check A
+        if (realBuyPrice == 0 || (realBuyPrice/tickerPrice) > (1.0 + BotConfig.MAX_SLIPPAGE)) {
+            rejectionReasons.computeIfAbsent("SLIPPAGE_BUY", k -> new AtomicLong()).incrementAndGet();
+            return;
+        }
+
+        // C. Venta en Exchange B (Bid)
+        // Asumimos transferencia instantánea (Capital Estático) -> Vendemos la misma cantidad
+        double realSellPrice = connector.calculateWeightedPrice(bookSell, "SELL", qtyAsset);
+
+        // Slippage Check B
+        if (realSellPrice == 0 || (realSellPrice/tickerPrice) < (1.0 - BotConfig.MAX_SLIPPAGE)) {
+            rejectionReasons.computeIfAbsent("SLIPPAGE_SELL", k -> new AtomicLong()).incrementAndGet();
+            return;
+        }
+
+        // D. Finanzas
+        double feeBuy = feeManager.getTradingFee(buyEx, asset + "USDT", "TAKER");
+        double feeSell = feeManager.getTradingFee(sellEx, asset + "USDT", "TAKER");
+
+        double costBuy = cap * feeBuy;
+        double revenue = (qtyAsset * realSellPrice) * (1 - feeSell); // Lo que entra neto
+
+        // PnL = (Lo que recibo en B) - (Lo que gasté en A)
+        // Nota: En capital estático, gasté 'cap' en A.
+        double netProfit = revenue - cap;
+        double totalFees = costBuy + (qtyAsset * realSellPrice * feeSell);
+
+        // E. Resultado
+        if (netProfit > BotConfig.MIN_PROFIT_THRESHOLD) {
+            updateBestOpportunity(buyEx + "->" + sellEx, asset, "SPATIAL", netProfit);
+
+            // Reutilizamos la tabla visual
+            printTriangularRow(buyEx + "->" + sellEx, asset, "DIRECT", cap, (netProfit+totalFees), totalFees, netProfit);
+
+            // El CrossExecutor internamente decidirá si es DryRun o Real.
+            if (Double.compare(cap, BotConfig.SEED_CAPITAL) == 0 && tradesCount.get() == 0) {
+
+                BotLogger.warn("🚀 OPORTUNIDAD ESPACIAL DETECTADA. INICIANDO SECUENCIA...");
+
+                // ✅ El CrossExecutor tiene su propio "if (dryRun)" adentro.
+                crossExecutor.executeCrossTrade(buyEx, sellEx, asset + "USDT", realBuyPrice, realSellPrice);
+
+                // Incrementamos contador para que el safety lock funcione (1 disparo por test)
+                tradesCount.incrementAndGet();
+            }
+
+            if (Double.compare(cap, testCapitals.get(0)) == 0) {
+                totalPotentialProfit.add(netProfit);
+                // (Nota: tradesCount ya se incrementó arriba si hubo disparo)
+            }
+        }
+    }
     // 📐 LÓGICA DE DETECCIÓN TRIANGULAR
     private void analyzeTriangularLoop(String exchange, String asset, Map<String, Double> prices) {
         String pair1 = asset + "USDT";
@@ -273,8 +414,11 @@ public class DeepMarketScanner implements MarketListener {
             // C. EJECUCIÓN DE FUEGO REAL (Solo si es el capital maestro y no es simulacro)
             // Se usa 'Double.compare' para evitar errores de precisión flotante
             if (!BotConfig.DRY_RUN && Double.compare(cap, BotConfig.SEED_CAPITAL) == 0 && tradesCount.get() == 0) {
-                BotLogger.warn("🚀 OPORTUNIDAD REAL DETECTADA. EJECUTANDO...");
-                tradeExecutor.executeTriangular(exchange, asset, bridge, cap);
+                // ⛔ COMENTADO POR SEGURIDAD (tradeExecutor es null en arquitectura Espacial)
+                // BotLogger.warn("🚀 OPORTUNIDAD REAL DETECTADA. EJECUTANDO...");
+                // tradeExecutor.executeTriangular(exchange, asset, bridge, cap);
+
+                BotLogger.warn("⚠️ Oportunidad Triangular detectada pero ignorada (Modo Espacial Activo).");
             }
 
             // D. Actualización de Métricas Globales (Solo sumamos UNA vez por ciclo, usando el capital base)

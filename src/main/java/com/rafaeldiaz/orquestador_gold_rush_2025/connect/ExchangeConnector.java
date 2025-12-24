@@ -144,7 +144,7 @@ public class ExchangeConnector {
                     BotLogger.error("❌ RECHAZO HTTP (" + exchange + "): " + body);
                     // Devolvemos un resultado fallido vacío
                     return new com.rafaeldiaz.orquestador_gold_rush_2025.model.OrderResult(
-                            "ERROR", "FAILED", 0, 0, 0, "NONE");
+                            "ERROR", "FAILED", 0, 0, 0, 0, 0, "NONE");
                 }
 
                 JsonNode root = mapper.readTree(body);
@@ -155,7 +155,7 @@ public class ExchangeConnector {
                         String msg = root.get("retMsg").asText();
                         BotLogger.error("❌ RECHAZO API BYBIT: " + msg);
                         return new com.rafaeldiaz.orquestador_gold_rush_2025.model.OrderResult(
-                                "ERROR", "FAILED", 0, 0, 0, "NONE");
+                                "ERROR", "FAILED", 0, 0, 0, 0, 0, "NONE");
                     }
                     orderId = root.get("result").get("orderId").asText();
                 }
@@ -170,17 +170,21 @@ public class ExchangeConnector {
         } catch (Exception e) {
             BotLogger.error("💥 CRITICAL PLACE ORDER: " + e.getMessage());
             return new com.rafaeldiaz.orquestador_gold_rush_2025.model.OrderResult(
-                    orderId, "FAILED", 0, 0, 0, "NONE");
+                    "ERROR", "FAILED", 0, 0, 0, 0, 0, "NONE");
         }
     }
 
     /**
      * Consulta el estado post-mortem de la orden para llenar el certificado.
      */
+    /**
+     * Consulta el estado post-mortem de la orden para llenar el certificado.
+     * Versión 5.0: Soporte completo para Average Price Real.
+     */
     private com.rafaeldiaz.orquestador_gold_rush_2025.model.OrderResult fetchOrderResult(String exchange, String orderId, String pair) {
         // Implementación BYBIT V5
         if (exchange.startsWith("bybit")) {
-            // Breve espera para propagación en motor de matching (200ms es seguro en V5)
+            // Breve espera para propagación en motor de matching
             try { Thread.sleep(200); } catch (InterruptedException e) {}
 
             String endpoint = "/v5/order/history?category=spot&orderId=" + orderId;
@@ -193,29 +197,40 @@ public class ExchangeConnector {
                     if (list.isArray() && list.size() > 0) {
                         JsonNode order = list.get(0);
 
-                        String status = order.get("orderStatus").asText();
-                        // En Bybit V5 'Filled' es el estado de éxito total
+                        String status = order.get("orderStatus").asText(); // "Filled", "PartiallyFilled"
+                        double originalQty = Double.parseDouble(order.get("qty").asText());
                         double execQty = Double.parseDouble(order.get("cumExecQty").asText());
+
+                        // 💰 EL DATO CLAVE: Valor total ejecutado en USDT (Quote Currency)
                         double execValue = Double.parseDouble(order.get("cumExecValue").asText());
+
                         double fee = Double.parseDouble(order.get("cumExecFee").asText());
+                        double limitPrice = order.has("price") ? Double.parseDouble(order.get("price").asText()) : 0.0;
 
-                        // Calculamos precio promedio real
-                        double avgPrice = (execQty > 0) ? (execValue / execQty) : 0.0;
-
+                        // Retornamos el nuevo OrderResult de 8 parámetros
                         return new com.rafaeldiaz.orquestador_gold_rush_2025.model.OrderResult(
-                                orderId, status, execQty, avgPrice, fee, "UNK");
+                                orderId,
+                                status,
+                                originalQty,
+                                execQty,
+                                execValue, // <--- Aquí va el cummulativeQuoteQty
+                                limitPrice,
+                                fee,
+                                "UNK" // Fee Asset (Bybit no siempre lo da fácil aquí, lo dejamos UNK)
+                        );
                     }
                 }
             } catch (Exception e) {
-                BotLogger.warn("⚠️ No se pudo verificar orden " + orderId + ": " + e.getMessage());
+                BotLogger.warn("⚠️ No se pudo verificar orden Bybit " + orderId + ": " + e.getMessage());
             }
         }
 
-        // Retorno de incertidumbre (pero con el ID para revisar manual)
-        return new com.rafaeldiaz.orquestador_gold_rush_2025.model.OrderResult(
-                orderId, "UNKNOWN", 0, 0, 0, "NONE");
-    }
+        // (Aquí iría la implementación de Binance/Mexc si la usáramos activamente)
 
+        // Retorno de fallo / incertidumbre
+        return new com.rafaeldiaz.orquestador_gold_rush_2025.model.OrderResult(
+                orderId, "UNKNOWN", 0, 0, 0, 0, 0, "NONE");
+    }
     public Request buildOrderRequest(String exchange, String pair, String side, String type, double qty, double price) {
         if (exchange.startsWith("bybit")) {
             String sideCap = side.equalsIgnoreCase("BUY") ? "Buy" : "Sell";
