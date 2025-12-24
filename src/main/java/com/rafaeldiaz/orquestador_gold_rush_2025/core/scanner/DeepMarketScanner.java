@@ -2,6 +2,7 @@ package com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.FeeManager;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.GlobalBalanceReporter;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.BotConfig;
 import com.rafaeldiaz.orquestador_gold_rush_2025.execution.CrossTradeExecutor;
 import com.rafaeldiaz.orquestador_gold_rush_2025.execution.RiskManager;
@@ -25,6 +26,7 @@ public class DeepMarketScanner implements MarketListener {
 
     private final ExchangeConnector connector;
     private final FeeManager feeManager;
+    private final GlobalBalanceReporter balanceReporter;
     // El Ejecutor Espacial
     private final CrossTradeExecutor crossExecutor;
     private static final boolean AUTO_EXECUTE_ENABLED = false;
@@ -63,7 +65,7 @@ public class DeepMarketScanner implements MarketListener {
         this.connector = connector;
         this.feeManager = new FeeManager(connector);
         this.pairSelector = new DynamicPairSelector(connector, this, feeManager);
-
+        this.balanceReporter = new GlobalBalanceReporter(connector);
         // this.tradeExecutor = new TradeExecutor(connector, feeManager); // <--- COMENTADO (Legacy)
 
         // ============================================================
@@ -102,7 +104,9 @@ public class DeepMarketScanner implements MarketListener {
         BotLogger.info("🛡️ Modo Fuego Real: " + (!BotConfig.DRY_RUN ? "ACTIVADO 🔥" : "DESACTIVADO (Simulación)"));
 
         printHeader();
-        pairSelector.start();  //Selección dinámica de pares
+        pairSelector.start();  // Selección dinámica de pares
+
+        // Reporte de Telegram en segundo plano
         scheduler.scheduleAtFixedRate(
                 this::sendTelegramReport,
                 BotConfig.REPORT_INTERVAL_MIN,
@@ -112,13 +116,29 @@ public class DeepMarketScanner implements MarketListener {
 
         Thread.ofVirtual().start(() -> {
             long endTime = System.currentTimeMillis() + (durationMinutes * 60 * 1000L);
+
+            // 1. ✅ DEFINIR CONTADOR DE CICLOS (Nuevo)
+            int cycleCount = 0;
+
             while (System.currentTimeMillis() < endTime) {
 
-                // 1. Ejecutamos el escaneo batch que usted ya tiene
+                // 2. ✅ INCREMENTAR CONTADOR (Nuevo)
+                cycleCount++;
+
+                // 3. Ejecutamos el escaneo normal
                 scanFullMatrixBatchOptimized();
 
+                // =========================================================
+                // 4. ✅ REPORTE DE SALDOS (LOGÍSTICA) - PEGAR AQUÍ
+                // =========================================================
+                // Se ejecuta en cada ciclo para que monitoree la recarga en tiempo real
+                if (cycleCount % 1 == 0) {
+                    balanceReporter.printReport();
+                }
+                // =========================================================
+
                 try {
-                    // 2. 💉 AQUÍ INYECTAMOS EL DELAY DESDE EL CONFIG
+                    // 5. Inyectamos el delay
                     Thread.sleep(BotConfig.SCAN_DELAY);
                 } catch (InterruptedException e) {
                     break;
@@ -127,7 +147,6 @@ public class DeepMarketScanner implements MarketListener {
             finalizeScan();
         });
     }
-
     private void scanFullMatrixBatchOptimized() {
         Map<String, Map<String, Double>> marketData = new ConcurrentHashMap<>();
 

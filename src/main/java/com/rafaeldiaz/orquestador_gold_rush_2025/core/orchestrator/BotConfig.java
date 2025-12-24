@@ -12,6 +12,7 @@ import java.util.stream.Collectors;
  * Centraliza los parámetros críticos de la misión.
  */
 public class BotConfig {
+
     private static final Dotenv dotenv = Dotenv.load();
 
     // Estado del Seguro
@@ -79,4 +80,5 @@ public class BotConfig {
     public static boolean isSpatialStrategy() {
         return "SPATIAL".equalsIgnoreCase(STRATEGY_TYPE);
     }
+    public static final int BOOK_DEPTH = Integer.parseInt(dotenv.get("BOOK_DEPTH","20"));
 }

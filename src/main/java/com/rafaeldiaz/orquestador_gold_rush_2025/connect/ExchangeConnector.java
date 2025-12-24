@@ -21,7 +21,7 @@ public class ExchangeConnector {
         String get(String key);
     }
 
-    // 📦 ESTRUCTURA DE DATOS PARA EL LIBRO DE ÓRDENES (NUEVO FASE 2)
+    // 📦 ESTRUCTURA DE DATOS PARA EL LIBRO DE ÓRDENES
     public record OrderBook(List<double[]> bids, List<double[]> asks) {}
 
     private final Map<String, Long> exchangeRTT = new ConcurrentHashMap<>();
@@ -115,15 +115,11 @@ public class ExchangeConnector {
         }
     }
 
+
     // =========================================================================
-    // 🔫 2. ÓRDENES Y DATOS
-    // =========================================================================
-// =========================================================================
     // 🔫 2. ÓRDENES DE FUEGO REAL (PLACE & VERIFY) - PRODUCCIÓN
     // =========================================================================
 
-    // Importante: Asegúrate de importar tu record al inicio del archivo:
-    // import com.rafaeldiaz.orquestador_gold_rush_2025.model.OrderResult;
 
     /**
      * Ejecuta una orden y ESPERA la confirmación de la verdad.
@@ -232,19 +228,58 @@ public class ExchangeConnector {
                 orderId, "UNKNOWN", 0, 0, 0, 0, 0, "NONE");
     }
     public Request buildOrderRequest(String exchange, String pair, String side, String type, double qty, double price) {
-        if (exchange.startsWith("bybit")) {
+        // BYBIT V5
+        if (exchange.toLowerCase().contains("bybit")) {
             String sideCap = side.equalsIgnoreCase("BUY") ? "Buy" : "Sell";
             String orderType = type.equalsIgnoreCase("LIMIT") ? "Limit" : "Market";
-            // FOK (Fill Or Kill) solo aplica para LIMIT en Bybit V5
             String timeInForce = (type.equalsIgnoreCase("LIMIT")) ? ",\"timeInForce\":\"FOK\"" : "";
 
-            String json = String.format("{\"category\":\"spot\",\"symbol\":\"%s\",\"side\":\"%s\",\"orderType\":\"%s\",\"qty\":\"%s\"%s%s}",
-                    pair, sideCap, orderType, String.valueOf(qty),
-                    orderType.equals("Limit") ? ",\"price\":\"" + price + "\"" : "",
+            // 🇺🇸 FORZAMOS Locale.US PARA QUE USE PUNTOS (.) Y NO COMAS (,)
+            String priceStr = String.format(java.util.Locale.US, "%.8f", price);
+            String qtyStr = String.format(java.util.Locale.US, "%.8f", qty);
+
+            String json = String.format(java.util.Locale.US,
+                    "{\"category\":\"spot\",\"symbol\":\"%s\",\"side\":\"%s\",\"orderType\":\"%s\",\"qty\":\"%s\"%s%s}",
+                    pair.replace("-", "").toUpperCase(),
+                    sideCap,
+                    orderType,
+                    qtyStr,
+                    orderType.equals("Limit") ? ",\"price\":\"" + priceStr + "\"" : "",
                     timeInForce);
 
             return buildSignedRequest(exchange, "POST", "/v5/order/create", json);
         }
+
+        // BINANCE / MEXC (API V3)
+        if (exchange.equalsIgnoreCase("binance") || exchange.equalsIgnoreCase("mexc")) {
+            String cleanPair = pair.replace("-", "").toUpperCase();
+            // Convertimos a String con punto decimal asegurado
+            String qtyStr = String.format(java.util.Locale.US, "%.8f", qty);
+
+            // Base query string
+            String query = "symbol=" + cleanPair + "&side=" + side.toUpperCase() + "&type=" + type.toUpperCase() + "&quantity=" + qtyStr;
+
+            // Si es LIMIT, agregamos precio y TimeInForce
+            if (type.equalsIgnoreCase("LIMIT")) {
+                String priceStr = String.format(java.util.Locale.US, "%.8f", price);
+                query += "&price=" + priceStr + "&timeInForce=GTC";
+            }
+
+            // Agregamos timestamp y firma
+            long timestamp = Instant.now().toEpochMilli();
+            query += "&timestamp=" + timestamp + "&recvWindow=5000";
+
+            String signature = hmacSha256(query, getApiSecret(exchange));
+            String finalUrl = (exchange.equalsIgnoreCase("binance") ? BINANCE_URL : MEXC_URL)
+                    + "/api/v3/order?" + query + "&signature=" + signature;
+
+            return new Request.Builder()
+                    .url(finalUrl)
+                    .header(exchange.equalsIgnoreCase("mexc") ? "X-MEXC-APIKEY" : "X-MBX-APIKEY", getApiKey(exchange))
+                    .post(RequestBody.create("", MediaType.parse("application/x-www-form-urlencoded"))) // POST vacío
+                    .build();
+        }
+
         return null;
     }
 
@@ -269,12 +304,13 @@ public class ExchangeConnector {
     }
 
     // =========================================================================
-    // 📖 2.5 VISIÓN DE RAYOS X (ORDER BOOK)
+    // 📖 2.5 VISIÓN DE AMPLIO ESPECTRO (ORDER BOOK)
     // =========================================================================
     /**
      * Descarga la profundidad del mercado (Bids y Asks) para calcular Slippage.
      */
     public OrderBook fetchOrderBook(String exchange, String pair, int depth) {
+        depth = (depth == 0) ? BotConfig.BOOK_DEPTH : depth;
         String cleanPair = pair.replace("-", "").toUpperCase();
         List<double[]> bids = new ArrayList<>();
         List<double[]> asks = new ArrayList<>();
@@ -760,8 +796,11 @@ public class ExchangeConnector {
     }
 
     private String getApiKey(String ex) {
-        return switch (ex) {
+        // Normalizamos a minúsculas para evitar errores
+        return switch (ex.toLowerCase()) {
             case "bybit", "bybit_sub1" -> envProvider.get("BYBIT_SUB1_KEY");
+            case "bybit_sub2" -> envProvider.get("BYBIT_SUB2_KEY"); // <--- NUEVO
+            case "bybit_sub3" -> envProvider.get("BYBIT_SUB3_KEY"); // <--- NUEVO
             case "binance" -> envProvider.get("BINANCE_KEY");
             case "mexc" -> envProvider.get("MEXC_KEY");
             case "kucoin" -> envProvider.get("KUCOIN_KEY");
@@ -770,8 +809,10 @@ public class ExchangeConnector {
     }
 
     private String getApiSecret(String ex) {
-        return switch (ex) {
+        return switch (ex.toLowerCase()) {
             case "bybit", "bybit_sub1" -> envProvider.get("BYBIT_SUB1_SECRET");
+            case "bybit_sub2" -> envProvider.get("BYBIT_SUB2_SECRET"); // <--- NUEVO
+            case "bybit_sub3" -> envProvider.get("BYBIT_SUB3_SECRET"); // <--- NUEVO
             case "binance" -> envProvider.get("BINANCE_SECRET");
             case "mexc" -> envProvider.get("MEXC_SECRET");
             case "kucoin" -> envProvider.get("KUCOIN_SECRET");
@@ -1010,7 +1051,94 @@ public class ExchangeConnector {
         }
         return 0.01;
     }
+    // En ExchangeConnector.java
+
+    // =========================================================================
+    // 🏦 GESTIÓN DE SALDOS MASIVA (SOLUCIÓN NATIVA)
+    // =========================================================================
+    public Map<String, Double> fetchBalances(String exchangeName) {
+        Map<String, Double> balances = new HashMap<>();
+        String exchange = exchangeName.toLowerCase();
+
+        try {
+            // --- CASO 1: BYBIT (V5 Unified) ---
+            if (exchange.contains("bybit")) {
+                // Usamos la cuenta sub1 si es necesario, o el string tal cual
+                String targetName = exchange.equals("bybit") ? "bybit_sub1" : exchange;
+                String endpoint = "/v5/account/wallet-balance?accountType=UNIFIED";
+                // Nota: Sin '&coin=' trae todas las monedas con saldo
+
+                Request request = buildSignedRequest(targetName, "GET", endpoint, "");
+
+                try (Response response = executeWithRetry(request)) {
+                    if (response.isSuccessful()) {
+                        // 🕵️‍♂️ LÍNEA DE ESPIONAJE
+                       // BotLogger.info("🔎 FORENSE BYBIT JSON: " + response);
+                        JsonNode root = mapper.readTree(response.body().string());
+                        if (root.path("retCode").asInt() == 0) {
+                            JsonNode list = root.path("result").path("list");
+                            if (list.isArray() && list.size() > 0) {
+                                JsonNode coins = list.get(0).path("coin");
+                                for (JsonNode c : coins) {
+                                    String asset = c.path("coin").asText();
+                                    double amount = Double.parseDouble(c.path("walletBalance").asText("0"));
+                                    if (amount > 0) balances.put(asset, amount);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // --- CASO 2: BINANCE & MEXC (Estándar /api/v3/account) ---
+            else if (exchange.equals("binance") || exchange.equals("mexc")) {
+                Request request = buildBinanceMexcRequest(exchange, "/api/v3/account");
+
+                try (Response response = client.newCall(request).execute()) {
+                    if (response.isSuccessful()) {
+                        JsonNode root = mapper.readTree(response.body().string());
+                        JsonNode balNode = root.path("balances");
+                        if (balNode.isArray()) {
+                            for (JsonNode b : balNode) {
+                                String asset = b.path("asset").asText();
+                                double free = b.path("free").asDouble(0);
+                                if (free > 0) balances.put(asset, free);
+                            }
+                        }
+                    }
+                }
+            }
+            // --- CASO 3: KUCOIN (Estándar /api/v1/accounts) ---
+            else if (exchange.equals("kucoin")) {
+                Request request = buildKucoinRequest("GET", "/api/v1/accounts", "");
+
+                try (Response response = executeWithRetry(request)) {
+                    if (response.isSuccessful()) {
+                        JsonNode root = mapper.readTree(response.body().string());
+                        if (root.path("code").asText().equals("200000")) {
+                            JsonNode data = root.path("data");
+                            if (data.isArray()) {
+                                for (JsonNode acc : data) {
+                                    // Kucoin separa cuentas (main/trade), sumamos todo o tomamos trade
+                                    if (acc.path("type").asText().equals("trade")) {
+                                        String asset = acc.path("currency").asText();
+                                        double available = acc.path("available").asDouble(0);
+                                        if (available > 0) balances.put(asset, available);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+        } catch (Exception e) {
+            BotLogger.error("⚠️ Error leyendo saldos masivos de " + exchangeName + ": " + e.getMessage());
+        }
+
+        return balances;
+    }
     public long getRTT(String exchange) {
         return exchangeRTT.getOrDefault(exchange.toLowerCase(), -1L);
     }
+
 }
