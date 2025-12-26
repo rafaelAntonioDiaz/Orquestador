@@ -3,10 +3,7 @@ package com.rafaeldiaz.orquestador_gold_rush_2025.core;
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.BotConfig;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner.DeepMarketScanner;
-import com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner.DynamicPairSelector;
-import com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner.ArbitrageDetector;
-import com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner.CrossArbitrageDetector;
-
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.ExecutionCoordinator;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.FeeManager;
 
 import org.junit.jupiter.api.DisplayName;
@@ -14,7 +11,6 @@ import org.junit.jupiter.api.Test;
 
 
 import java.text.DecimalFormat;
-import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -35,7 +31,8 @@ public class PulseDrillTest {
     void runPulseDrill() throws InterruptedException {
         // 1. Inicializamos la máquina
         ExchangeConnector connector = new ExchangeConnector();
-        DeepMarketScanner scanner = new DeepMarketScanner(connector);
+        ExecutionCoordinator cordinator = new ExecutionCoordinator();
+        DeepMarketScanner scanner = new DeepMarketScanner(connector, cordinator);
         FeeManager feeManager = new FeeManager(connector);
 
         // 2. 🔥 REPORTE DE ESTADO INICIAL (TELEMETRÍA)

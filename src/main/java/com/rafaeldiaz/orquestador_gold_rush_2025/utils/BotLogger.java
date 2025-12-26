@@ -17,6 +17,10 @@ public class BotLogger {
     private static final Logger logger = Logger.getLogger("GoldRushBot");
     private static final String LOG_DIR = "logs";
     private static final String CSV_FILE = "logs/trades.csv";
+
+    // ✅ CORREGIDO: La variable ahora está DENTRO de la clase
+    private static final String OPPORTUNITY_FILE = "logs/opportunities.csv";
+
     private static final OkHttpClient httpClient = new OkHttpClient();
 
     // 🚀 MEJORA: Ruta absoluta garantizada para encontrar el .env
@@ -32,7 +36,8 @@ public class BotLogger {
         try {
             File dir = new File(LOG_DIR);
             if (!dir.exists()) dir.mkdirs();
-            FileHandler fh = new FileHandler(LOG_DIR + "/bot.log", 10 * 1024 * 1024, 5, true);
+            FileHandler fh = new FileHandler(LOG_DIR
+                    + "/bot.log", 10 * 1024 * 1024, 5, true);
             fh.setFormatter(new SimpleFormatter() {
                 private static final String format = "[%1$tF %1$tT] [%2$-7s] %3$s %n";
                 @Override
@@ -44,9 +49,11 @@ public class BotLogger {
             logger.setLevel(Level.INFO);
             logger.setUseParentHandlers(true);
             initCSV();
+            initOpportunityCSV();
         } catch (IOException e) {
             System.err.println("FATAL: No se pudo iniciar el sistema de logs: " + e.getMessage());
         }
+
     }
 
     public static void info(String msg) { logger.info(msg); }
@@ -111,6 +118,31 @@ public class BotLogger {
                 pw.println("Fecha,Par,Tipo,Profit_Percent,Volumen_USDT");
             } catch (IOException e) {
                 logger.severe("No se pudo crear cabecera CSV");
+            }
+        }
+    }
+
+    // ✅ NUEVO MÉTODO: REGISTRO DE INTELIGENCIA
+    public static void logOpportunity(String type, String asset, String route,
+                                      double grossGap, double netProfit,
+                                      String status, String reason) {
+        String date = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+        try (PrintWriter pw = new PrintWriter(new FileWriter(OPPORTUNITY_FILE, true))) {
+            // CSV: Fecha, Tipo, Activo, Ruta, SpreadBruto, ProfitNeto, Estado, Razón
+            pw.printf(Locale.US, "%s,%s,%s,%s,%.4f,%.4f,%s,%s%n",
+                    date, type, asset, route, grossGap, netProfit, status, reason);
+        } catch (IOException e) {
+            logger.severe("Error escribiendo Opportunity CSV: " + e.getMessage());
+        }
+    }
+
+    private static void initOpportunityCSV() {
+        File f = new File(OPPORTUNITY_FILE);
+        if (!f.exists()) {
+            try (PrintWriter pw = new PrintWriter(new FileWriter(f))) {
+                pw.println("Timestamp,Strategy,Asset,Route,Gross_Spread_Pct,Net_Profit_Usd,Status,Reason");
+            } catch (IOException e) {
+                logger.severe("No se pudo crear cabecera Opportunity CSV");
             }
         }
     }
