@@ -2,6 +2,7 @@ package com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeStrategy;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.PortfolioHealthManager;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner.MarketListener;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.FeeManager;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.ProfitCalculator;
@@ -54,8 +55,8 @@ public class GoldRushOrchestrator implements MarketListener {
         // 2. Inicializamos Executor pasándole AMBOS componentes (Corrección aplicada)
         this.executor = new TradeExecutor(connector, this.feeManager);
         this.executor.setDryRun(true);
-
-        this.pairSelector = new DynamicPairSelector(connector, this, feeManager);
+        PortfolioHealthManager cfo = new PortfolioHealthManager(connector);
+        this.pairSelector = new DynamicPairSelector(connector, this, feeManager, cfo);
         this.activeTargets.add("SOLUSDT");
     }
 

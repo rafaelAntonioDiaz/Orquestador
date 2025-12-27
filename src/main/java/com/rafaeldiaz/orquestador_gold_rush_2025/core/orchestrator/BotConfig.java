@@ -22,10 +22,13 @@ public class BotConfig {
 
     // Capital Maestro
     public static final double SEED_CAPITAL = Double.parseDouble(dotenv.get("CAPITAL_SEMILLA", "15.0").trim());
-
+    public static final List<Double> TEST_CAPITALS = Arrays.stream(dotenv.get("TEST_CAPITALS", "10,100,200,400,800,1600,2800").split(","))
+            .map(String::trim)              // Quitamos espacios
+            .map(Double::parseDouble)       // Convertimos a Double
+            .collect(Collectors.toList());
     // Gatillo de Rentabilidad
     public static final double MIN_PROFIT_THRESHOLD = Double.parseDouble(dotenv.get("MIN_PROFIT_USDT", "-0.30").trim());
-
+    public static final double MIN_PROFIT_USDT = Double.parseDouble(dotenv.get("MIN_PROFIT_USDT", "0.05").trim());
     // Latencia de Escaneo
     public static final int SCAN_DELAY = Integer.parseInt(dotenv.get("SCAN_INTERVAL_MS", "3000").trim());
 
@@ -39,10 +42,7 @@ public class BotConfig {
     // Por defecto 1% (0.01) si no está en el .env
     public static final double MAX_SLIPPAGE = Double.parseDouble(dotenv.get("MAX_SLIPPAGE", "0.01").trim());
 
-    public static final List<Double> TEST_CAPITALS = Arrays.stream(dotenv.get("TEST_CAPITALS", "10,100,200,400,800,1600,2800").split(","))
-            .map(String::trim)              // Quitamos espacios
-            .map(Double::parseDouble)       // Convertimos a Double
-            .collect(Collectors.toList());
+
     // 1. Exchanges Activos
     public static final List<String> ACTIVE_EXCHANGES = parseList(
             dotenv.get("ACTIVE_EXCHANGES", "binance,bybit,mexc,kucoin")

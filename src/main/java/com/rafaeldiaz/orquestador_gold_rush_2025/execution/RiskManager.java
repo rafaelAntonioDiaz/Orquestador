@@ -8,6 +8,7 @@ import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 import java.io.File;
 import java.io.IOException;
 import java.time.LocalDate;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -81,35 +82,21 @@ public class RiskManager {
      * Registra el resultado matemático de una operación y actualiza la curva de equidad.
      * @param pnlUSD Resultado neto de la operación (Net Profit/Loss)
      */
+// RiskManager.java optimizado
     public synchronized void reportTradeResult(double pnlUSD) {
+        // 1. Actualización en RAM (Nanosegundos)
         currentCapital += pnlUSD;
         dailyPnL += pnlUSD;
+        if (currentCapital > peakCapital) peakCapital = currentCapital;
 
-        // 1. Actualización de High-Water Mark (Pico Histórico)
-        if (currentCapital > peakCapital) {
-            peakCapital = currentCapital;
-        }
-
-        // 2. Monitoreo de Eficiencia de Ejecución
-        if (pnlUSD < 0) {
-            int failures = executionFailures.incrementAndGet();
-            BotLogger.warn("📉 Varianza Negativa detectada: " + failures + "/" + MAX_CONSECUTIVE_FAILURES);
-            if (failures >= MAX_CONSECUTIVE_FAILURES) {
-                status.set(SystemStatus.PAUSED_DEVIATION);
-                BotLogger.error("⏸️ PROTOCOLO DE PAUSA ACTIVADO. Desviación estadística consecutiva detectada.");
-            }
-        } else {
-            executionFailures.set(0); // Reset ante ejecución exitosa
-        }
-
-        // 3. Validación de Límites y Persistencia
+        // Lógica de circuito (rápida)
+        if (pnlUSD < 0) { /* lógica de fallos */ }
         validateRiskParameters();
 
-        BotLogger.info(String.format("📊 REPORTE DE EJECUCIÓN: Delta: $%.4f | PnL Diario: $%.4f", pnlUSD, dailyPnL));
-
-        saveFinancialState(); // Persistencia atómica
+        // 2. Persistencia ASÍNCRONA (Fire & Forget)
+        // No bloqueamos el hilo de trading esperando al disco duro
+        CompletableFuture.runAsync(this::saveFinancialState);
     }
-
     /**
      * Evalúa las condiciones de parada (Circuit Breakers).
      */

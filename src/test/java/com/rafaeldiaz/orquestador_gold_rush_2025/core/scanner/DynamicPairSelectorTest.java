@@ -2,6 +2,7 @@ package com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.FeeManager;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.PortfolioHealthManager;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -28,7 +29,8 @@ class DynamicPairSelectorTest {
     void testSelectTopVolatility() throws Exception {
         // ARRANGE
         FeeManager mockfeeManager = new FeeManager(mockConnector);
-        DynamicPairSelector selector = new DynamicPairSelector(mockConnector, mockListener, mockfeeManager);
+        PortfolioHealthManager mockCfo = new PortfolioHealthManager(mockConnector);
+        DynamicPairSelector selector = new DynamicPairSelector(mockConnector, mockListener, mockfeeManager, mockCfo);
 
         // 1. Simulamos velas para BTC (Volátil)
         when(mockConnector.fetchPrice(anyString(), eq("BTCUSDT"))).thenReturn(50000.0);

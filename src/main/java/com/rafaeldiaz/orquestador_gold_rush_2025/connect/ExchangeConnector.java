@@ -326,7 +326,6 @@ public class ExchangeConnector {
             }
         } catch (Exception e) { return 0.0; }
     }
-
     // =========================================================================
     // 📖 2.5 VISIÓN DE AMPLIO ESPECTRO (ORDER BOOK)
     // =========================================================================
@@ -446,11 +445,9 @@ public class ExchangeConnector {
         }
         return candles;
     }
-
     // =========================================================================
-    // 📊 4. GESTIÓN DE FEES (TRADING REAL - FASE FINAL)
+    // 📊 4. GESTIÓN DE FEES (TRADING REAL)
     // =========================================================================
-
     /**
      * Consulta la comisión de trading real (Maker/Taker) para un par específico.
      * Implementa endpoints reales para Bybit, Binance, MEXC y KuCoin.
@@ -742,7 +739,8 @@ public class ExchangeConnector {
         String recvWindow = "5000";
         String paramStr = "";
         if ("GET".equals(method)) {
-            if (endpoint.contains("?")) paramStr = endpoint.substring(endpoint.indexOf("?") + 1);
+            if (endpoint.contains("?")) paramStr =
+                    endpoint.substring(endpoint.indexOf("?") + 1);
         } else {
             paramStr = (jsonPayload == null) ? "" : jsonPayload;
         }
@@ -769,26 +767,60 @@ public class ExchangeConnector {
         return builder.build();
     }
 
+    // =========================================================================
+    // 🔐 CONSTRUCTOR DE PETICIONES (BINANCE - MEXC - KUCOIN
+    // =========================================================================
     private Request buildBinanceMexcRequest(String exchange, String endpoint) {
         long timestamp = Instant.now().toEpochMilli();
-        String query = "timestamp=" + timestamp + "&recvWindow=5000";
-        String signature = hmacSha256(query, getApiSecret(exchange));
-        return new Request.Builder()
-                .url((exchange.equals("binance") ? BINANCE_URL : MEXC_URL) + endpoint + "?" + query + "&signature=" + signature)
-                .header(exchange.equals("mexc") ? "X-MEXC-APIKEY" : "X-MBX-APIKEY", getApiKey(exchange))
-                .get().build();
-    }
+        String query;
 
+        // 🔧 LÓGICA DIFERENCIADA (Según Documentación Oficial)
+        if (exchange.equalsIgnoreCase("mexc")) {
+            // MEXC V3: recvWindow es opcional.
+            // Para evitar errores 400 por desincronización de reloj,
+            // probamos PRIMERO enviando SOLO el timestamp. Menos es más.
+            query = "timestamp=" + timestamp;
+        } else {
+            // Binance: Estándar estricto
+            query = "timestamp=" + timestamp + "&recvWindow=5000";
+        }
+
+        // La firma DEBE coincidir byte a byte con la query string
+        String signature = hmacSha256(query, getApiSecret(exchange));
+
+        String baseUrl = exchange.equals("binance") ? BINANCE_URL : MEXC_URL;
+        String fullUrl = baseUrl + endpoint + "?" + query + "&signature=" + signature;
+
+        return new Request.Builder()
+                .url(fullUrl)
+                .header(exchange.equals("mexc") ? "X-MEXC-APIKEY" : "X-MBX-APIKEY", getApiKey(exchange))
+                .header("Content-Type", "application/json") // Buena práctica para MEXC
+                .get()
+                .build();
+    }
+    // =========================================================================
+    // 🔐 CONSTRUCTOR KUCOIN (CORREGIDO PARA V2 - PASSPHRASE ENCRIPTADA)
+    // =========================================================================
     private Request buildKucoinRequest(String method, String endpoint, String body) {
         long timestamp = System.currentTimeMillis();
-        String signature = hmacSha256Base64(timestamp + method + endpoint + body, getApiSecret("kucoin"));
+        String apiSecret = getApiSecret("kucoin");
+        String rawPassphrase = envProvider.get("KUCOIN_PASSPHRASE");
+
+        // 1. FIRMA DE LA PETICIÓN (Endpoint + Body)
+        String signature = hmacSha256Base64(timestamp + method + endpoint + body, apiSecret);
+
+        // 2. ENCRIPTACIÓN DE LA PASSPHRASE
+        // KuCoin V2 requiere que la passphrase se firme con el Secret y se pase a Base64
+        String encryptedPassphrase = hmacSha256Base64(rawPassphrase, apiSecret);
+
         return new Request.Builder()
                 .url(KUCOIN_URL + endpoint)
                 .header("KC-API-KEY", getApiKey("kucoin"))
                 .header("KC-API-SIGN", signature)
-                .header("KC-API-PASSPHRASE", envProvider.get("KUCOIN_PASSPHRASE"))
+                .header("KC-API-PASSPHRASE", encryptedPassphrase) // <--- AHORA VA ENCRIPTADA
                 .header("KC-API-TIMESTAMP", String.valueOf(timestamp))
-                .header("KC-API-KEY-VERSION", "2")
+                .header("KC-API-KEY-VERSION", "2") // Estamos forzando V2
+                .header("Content-Type", "application/json")
                 .get().build();
     }
 
@@ -899,7 +931,6 @@ public class ExchangeConnector {
     // =========================================================================
     // 🎯 2.6 PRECISIÓN QUIRÚRGICA (BID/ASK INSTANTÁNEO)
     // =========================================================================
-
     public double fetchBid(String exchange, String pair) {
         // Pedimos profundidad mínima (limit=1) para ser ultra-rápidos
         OrderBook book = fetchOrderBook(exchange, pair, 1);
@@ -908,7 +939,6 @@ public class ExchangeConnector {
         }
         return fetchPrice(exchange, pair); // Fallback al Last Price si falla el libro
     }
-
     public double fetchAsk(String exchange, String pair) {
         OrderBook book = fetchOrderBook(exchange, pair, 1);
         if (book.asks() != null && !book.asks().isEmpty()) {
@@ -983,7 +1013,6 @@ public class ExchangeConnector {
      */
     // Caché en memoria
     private final Map<String, Double> stepSizeCache = new ConcurrentHashMap<>();
-
     public double getStepSize(String exchange, String pair) {
         String key = exchange + "_" + pair;
         if (stepSizeCache.containsKey(key)) return stepSizeCache.get(key);
@@ -1067,109 +1096,210 @@ public class ExchangeConnector {
         }
         return 0.01;
     }
-    // En ExchangeConnector.java
 
-    // =========================================================================
-    // 🏦 GESTIÓN DE SALDOS MASIVA (SOLUCIÓN NATIVA)
-    // =========================================================================
 // =========================================================================
-    // 🏦 GESTIÓN DE SALDOS MASIVA (SOLUCIÓN NATIVA CORREGIDA)
-    // =========================================================================
-    public Map<String, Double> fetchBalances(String exchangeName) {
+// 🏦 GESTIÓN DE SALDOS (ARQUITECTURA SEPARADA)
+// =========================================================================
+public Map<String, Double> fetchBalances(String exchangeName) {
+    String exchange = exchangeName.toLowerCase();
+
+    // 1. RUTA BINANCE (Código Sagrado - NO TOCAR)
+    if (exchange.equals("binance")) {
+        return fetchBinanceBalances();
+    }
+    // 2. RUTA MEXC (Zona de Experimentos)
+    else if (exchange.equals("mexc")) {
+        return fetchMexcBalances();
+    }
+    // 3. RUTA BYBIT
+    else if (exchange.contains("bybit")) {
+        return fetchBybitBalances(exchange);
+    }
+    // 4. RUTA KUCOIN
+    else if (exchange.equals("kucoin")) {
+        return fetchKucoinBalances();
+    }
+
+    return new HashMap<>();
+}
+
+    // 🟢 BINANCE (ESTABLE)
+    private Map<String, Double> fetchBinanceBalances() {
         Map<String, Double> balances = new HashMap<>();
-        String exchange = exchangeName.toLowerCase();
-
         try {
-            // --- CASO 1: BYBIT (V5 Unified) ---
-            if (exchange.contains("bybit")) {
-                String targetName = exchange.equals("bybit") ? "bybit_sub1" : exchange;
-                String endpoint = "/v5/account/wallet-balance?accountType=UNIFIED";
+            Request request = buildBinanceRequest("/api/v3/account"); // Usa su propio constructor
+            try (Response response = client.newCall(request).execute()) {
+                if (response.body() != null && response.isSuccessful()) {
+                    JsonNode root = mapper.readTree(response.body().string());
+                    JsonNode balNode = root.path("balances");
+                    if (balNode.isArray()) {
+                        for (JsonNode b : balNode) {
+                            String asset = b.path("asset").asText();
+                            double free = b.path("free").asDouble(0);
 
-                Request request = buildSignedRequest(targetName, "GET", endpoint, "");
-
-                try (Response response = executeWithRetry(request)) {
-                    // 🛡️ BLINDAJE CORRECTO:
-                    if (response.body() == null) return balances;
-
-                    // 🔥 CLAVE DEL ÉXITO: Leemos el stream UNA sola vez y lo guardamos en memoria
-                    String jsonBody = response.body().string();
-
-                    if (jsonBody.isEmpty()) {
-                        BotLogger.warn("⚠️ Bybit devolvió body vacío en fetchBalances.");
-                        return balances;
+                            if (free > 0) balances.put(asset, free);
+                        }
                     }
+                }
+            }
+        } catch (Exception e) {
+            BotLogger.error("⚠️ Error Binance Balance: " + e.getMessage());
+        }
+        return balances;
+    }
 
-                    // AHORA USAMOS LA VARIABLE 'jsonBody', NO response.body().string()
-                    JsonNode root = mapper.readTree(jsonBody);
+    // 🟠 MEXC (EXPERIMENTAL - AISLADO)
+    private Map<String, Double> fetchMexcBalances() {
+        Map<String, Double> balances = new HashMap<>();
+        try {
+            // Usamos el constructor EXCLUSIVO para MEXC
+            Request request = buildMexcRequest("/api/v3/account");
 
+            try (Response response = client.newCall(request).execute()) {
+                String body = response.body() != null ? response.body().string() : "";
+
+                if (!response.isSuccessful()) {
+                    BotLogger.warn("⚠️ [MEXC FAIL] Código: " + response.code() + " | Body: " + body);
+                    return balances;
+                }
+
+                JsonNode root = mapper.readTree(body);
+                JsonNode balNode = root.path("balances");
+
+                if (balNode.isArray()) {
+                    boolean foundSomething = false;
+                    for (JsonNode b : balNode) {
+                        String asset = b.path("asset").asText();
+                        double free = b.path("free").asDouble(0);
+                        double locked = b.path("locked").asDouble(0);
+
+                        // 🕵️ SONDA ESPÍA MEXC (Sensibilidad Máxima)
+                        if (free > 0 || locked > 0) {
+                            foundSomething = true;
+                            // BotLogger.info("🕵️ [SPY-MEXC] Activo: " + asset + " | Free: " + free);
+                            if (free > 0) balances.put(asset, free);
+                        }
+                    }
+                    if (!foundSomething) BotLogger.warn("⚠️ [SPY-MEXC] Conexión OK, pero saldo vacío (0 activos).");
+                }
+            }
+        } catch (Exception e) {
+            BotLogger.error("⚠️ Error MEXC Balance: " + e.getMessage());
+        }
+        return balances;
+    }
+// =========================================================================
+    // 🔐 CONSTRUCTORES DE PETICIONES (SEPARADOS)
+    // =========================================================================
+
+    // ✅ BINANCE REQUEST (Original y Funcional)
+    private Request buildBinanceRequest(String endpoint) {
+        long timestamp = Instant.now().toEpochMilli();
+        String query = "timestamp=" + timestamp + "&recvWindow=5000";
+        String signature = hmacSha256(query, getApiSecret("binance"));
+        String fullUrl = BINANCE_URL + endpoint + "?" + query + "&signature=" + signature;
+
+        return new Request.Builder()
+                .url(fullUrl)
+                .header("X-MBX-APIKEY", getApiKey("binance"))
+                .get()
+                .build();
+    }
+
+    // ⚠️ MEXC REQUEST (Nueva Lógica Anti-Error 400)
+    private Request buildMexcRequest(String endpoint) {
+        long timestamp = Instant.now().toEpochMilli();
+
+        // TRUCO: Ampliamos la ventana a 60 segundos (60000ms)
+        // MEXC permite esto y soluciona desajustes de reloj local vs servidor.
+        String query = "timestamp=" + timestamp + "&recvWindow=60000";
+
+        String signature = hmacSha256(query, getApiSecret("mexc"));
+        String fullUrl = MEXC_URL + endpoint + "?" + query + "&signature=" + signature;
+
+        return new Request.Builder()
+                .url(fullUrl)
+                .header("X-MEXC-APIKEY", getApiKey("mexc"))
+                .header("Content-Type", "application/json")
+                .get()
+                .build();
+    }
+    // 🔵 BYBIT
+    private Map<String, Double> fetchBybitBalances(String exchange) {
+        Map<String, Double> balances = new HashMap<>();
+        try {
+            String targetName = exchange.equals("bybit") ? "bybit_sub1" : exchange;
+            Request request = buildSignedRequest(targetName, "GET", "/v5/account/wallet-balance?accountType=UNIFIED", "");
+            try (Response response = executeWithRetry(request)) {
+                if (response.body() != null) {
+                    JsonNode root = mapper.readTree(response.body().string());
                     if (root.path("retCode").asInt() == 0) {
                         JsonNode list = root.path("result").path("list");
                         if (list.isArray() && list.size() > 0) {
-                            JsonNode coins = list.get(0).path("coin");
-                            for (JsonNode c : coins) {
-                                String asset = c.path("coin").asText();
-                                double amount = Double.parseDouble(c.path("walletBalance").asText("0"));
-                                if (amount > 0) balances.put(asset, amount);
-                            }
-                        }
-                    } else {
-                        BotLogger.warn("⚠️ Error API Bybit: " + root.path("retMsg").asText());
-                    }
-                }
-            }
-            // ... (Binance y Kucoin siguen igual, pero revise que no lea .string() dos veces) ...
-
-            // --- CASO 2: BINANCE & MEXC ---
-            else if (exchange.equals("binance") || exchange.equals("mexc")) {
-                Request request = buildBinanceMexcRequest(exchange, "/api/v3/account");
-
-                try (Response response = client.newCall(request).execute()) {
-                    if (response.body() != null && response.isSuccessful()) {
-                        // APLICAMOS LA MISMA LÓGICA POR SEGURIDAD
-                        String jsonBody = response.body().string();
-                        if (!jsonBody.isEmpty()) {
-                            JsonNode root = mapper.readTree(jsonBody);
-                            JsonNode balNode = root.path("balances");
-                            if (balNode.isArray()) {
-                                for (JsonNode b : balNode) {
-                                    String asset = b.path("asset").asText();
-                                    double free = b.path("free").asDouble(0);
-                                    if (free > 0) balances.put(asset, free);
-                                }
+                            for (JsonNode c : list.get(0).path("coin")) {
+                                double val = Double.parseDouble(c.path("walletBalance").asText("0"));
+                                if (val > 0) balances.put(c.path("coin").asText(), val);
                             }
                         }
                     }
                 }
             }
-            // ...
-
-        } catch (Exception e) {
-            // 🥋 MODELADO DE CLASE MUNDIAL: NOISE CANCELLATION
-            // Filtramos errores que son meramente "ruido" de la red o de la API de Bybit
-
-            String errorMsg = (e.getMessage() != null) ? e.getMessage() : "Unknown Error";
-
-            // Lista negra de errores que NO nos importan (Ruido)
-            boolean isNoise = errorMsg.contains("empty String") ||   // Bybit devolviendo nada
-                    errorMsg.contains("SocketTimeout") ||  // Red lenta
-                    errorMsg.contains("timeout") ||        // Red lenta
-                    errorMsg.contains("502") ||            // Bybit reiniciando servidor
-                    errorMsg.contains("504");              // Gateway timeout
-
-            if (!isNoise) {
-                // SOLO gritamos si es un error real (Claves malas, baneo, lógica rota)
-                BotLogger.warn("⚠️ Fallo lectura balance (" + exchangeName + "): " + errorMsg);
-            }
-
-            // Retornamos vacío. El DeepMarketScanner sabrá usar la caché.
-            // El flujo continúa suave como el agua.
-            return new HashMap<>();
-        }
-
+        } catch (Exception e) { /* Silent */ }
         return balances;
     }
+
+    // 🟣 KUCOIN
+    private Map<String, Double> fetchKucoinBalances() {
+        Map<String, Double> balances = new HashMap<>();
+        try {
+            // Construimos la petición
+            Request request = buildKucoinRequest("GET", "/api/v1/accounts", "");
+
+            // Ejecutamos (Usamos client directo para ver el error crudo sin reintentos que oculten la info)
+            try (Response response = client.newCall(request).execute()) {
+                String body = response.body() != null ? response.body().string() : "NO_BODY";
+
+                // 🕵️ CASO 1: ERROR HTTP (Auth, IP, etc)
+                if (!response.isSuccessful()) {
+                    return balances;
+                }
+
+                JsonNode root = mapper.readTree(body);
+
+                // 🕵️ CASO 2: ERROR LÓGICO API (Passphrase mal, etc)
+                if (!root.path("code").asText().equals("200000")) {
+                    BotLogger.warn("⚠️ [SPY-KUCOIN] API Error: " + root.path("msg").asText() + " (Code: " + root.path("code").asText() + ")");
+                } else {
+                    // 🕵️ CASO 3: ÉXITO - BUSCANDO ACTIVOS
+                    JsonNode data = root.path("data");
+                    boolean foundSomething = false;
+
+                    if (data.isArray()) {
+                        for (JsonNode acc : data) {
+                            String currency = acc.path("currency").asText();
+                            String type = acc.path("type").asText(); // "main" o "trade"
+                            double available = acc.path("available").asDouble(0);
+                            double balance = acc.path("balance").asDouble(0);
+
+                            // SONDA: Reportar CUALQUIER cosa mayor a 0
+                            if (balance > 0) {
+                                foundSomething = true;
+                            }
+
+                            // Lógica de Agregación: Sumamos todo lo disponible
+                            if (available > 0) balances.merge(currency, available, Double::sum);
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            BotLogger.error("❌ [SPY-KUCOIN] Excepción Técnica: " + e.getMessage());
+            e.printStackTrace();
+        }
+        return balances;
+    }
+
     public long getRTT(String exchange) {
         return exchangeRTT.getOrDefault(exchange.toLowerCase(), -1L);
     }
-
 }

@@ -1,81 +1,89 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.BotConfig;
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 
+import java.text.DecimalFormat;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
 
 /**
- * 🏦 AUDITOR DE BILLETERAS GLOBAL
- * Se encarga de mostrar "La Verdad" sobre nuestros fondos en tiempo real.
+ * 🏦 REPORTERO DE SALDOS (VISIBILIDAD TOTAL - OJO DE SAURON)
+ * Sin filtros de polvo, sin cuentas ocultas. Muestra TODO.
  */
 public class GlobalBalanceReporter {
 
     private final ExchangeConnector connector;
-    // Lista de monedas que nos importan (para filtrar basura/dust)
-    private final String[] CRITICAL_ASSETS = {"USDT", "PEPE", "WIF", "SOL", "BNB", "ETH", "FET"};
+
+    // Formateador preciso para cripto (hasta 8 decimales para ver el polvo)
+    private final DecimalFormat dfQty = new DecimalFormat("###,##0.00000000");
 
     public GlobalBalanceReporter(ExchangeConnector connector) {
         this.connector = connector;
     }
 
     public void printReport() {
-        StringBuilder sb = new StringBuilder();
-        sb.append("\n╔═════════════════════════════════════════════════════════════╗\n");
-        sb.append("║ 🏦 ESTADO DEL TESORO (INVENTARIO REAL)                      ║\n");
-        sb.append("╠══════════╦══════════╦═════════════════════╦═════════════════╣\n");
-        sb.append("║ EXCHANGE ║ ACTIVO   ║ CANTIDAD TOTAL      ║ DISPONIBLE      ║\n");
-        sb.append("╠══════════╬══════════╬═════════════════════╬═════════════════╣\n");
+        // Paleta de Colores
+        String C = BotLogger.CYAN;
+        String G = BotLogger.GREEN;
+        String Y = BotLogger.YELLOW;
+        String W = BotLogger.WHITE_BOLD;
+        String P = BotLogger.PURPLE;
+        String R = BotLogger.RESET;
 
-        boolean assetsFound = false;
+        BotLogger.info("\n" + C + "╔══════════════════╦══════════╦══════════════════════════╦═════════════════╗" + R);
+        BotLogger.info(C + "║ 🏦 ESTADO DEL TESORO (INVENTARIO REAL - MODO RAW)                           ║" + R);
+        BotLogger.info(C + "╠══════════════════╬══════════╬══════════════════════════╬═════════════════╣" + R);
+        BotLogger.info(C + "║ EXCHANGE         ║ ACTIVO   ║ CANTIDAD TOTAL           ║ DISPONIBLE      ║" + R);
+        BotLogger.info(C + "╠══════════════════╬══════════╬══════════════════════════╬═════════════════╣" + R);
 
-        String[] exchanges = {
-                "binance",
-                "bybit_sub1", // Miramos explícitamente la 1
-                "bybit_sub2", // Miramos la 2
-                "bybit_sub3", // Miramos la 3
-                "kucoin",
-                "mexc"
-        };
+        // 1. RECOLECCIÓN EXHAUSTIVA DE CUENTAS
+        // Combinamos TODAS las listas posibles para no dejar a nadie fuera (MEXC, Kucoin, etc.)
+        Set<String> allAccounts = new HashSet<>();
+        if (BotConfig.ACTIVE_EXCHANGES != null) allAccounts.addAll(BotConfig.ACTIVE_EXCHANGES);
+        if (BotConfig.SPATIAL_ACCOUNTS != null) allAccounts.addAll(BotConfig.SPATIAL_ACCOUNTS);
+        if (BotConfig.TRIANGULAR_ACCOUNTS != null) allAccounts.addAll(BotConfig.TRIANGULAR_ACCOUNTS);
 
-        for (String exchange : exchanges) {
+        for (String exchange : allAccounts) {
             try {
-                // Imaginamos que su conector tiene un método getBalances(exchange)
-                // que devuelve un Mapa <Moneda, Cantidad> o similar.
-                // Si su implementación es distinta, ajustaremos esta línea.
+                // Fetch de saldos (Raw)
                 Map<String, Double> balances = connector.fetchBalances(exchange);
 
-                if (balances == null || balances.isEmpty()) continue;
+                // Si la respuesta es nula o vacía, avisamos
+                if (balances == null || balances.isEmpty()) {
+                    // Opcional: Avisar si está vacío, pero mejor mantener la tabla limpia
+                    continue;
+                }
 
-                for (String asset : CRITICAL_ASSETS) {
-                    if (balances.containsKey(asset)) {
-                        double qty = balances.get(asset);
+                Map<String, Double> sortedBalances = new TreeMap<>(balances);
 
-                        // Solo mostramos si hay saldo relevante (> 0.01 para evitar dust)
-                        if (qty > 0.0001) {
-                            assetsFound = true;
-                            // Formato limpio tipo tabla
-                            sb.append(String.format("║ %-8s ║ %-8s ║ %-19.4f ║ %-15s ║\n",
-                                    exchange.toUpperCase(),
-                                    asset,
-                                    qty,
-                                    "100%" // Aquí podría ir el 'Available' real si la API lo da
-                            ));
-                        }
+                for (Map.Entry<String, Double> entry : sortedBalances.entrySet()) {
+                    String asset = entry.getKey();
+                    Double qty = entry.getValue();
+
+                    // ⚠️ FILTRO ELIMINADO: Ahora mostramos todo lo que sea mayor a CERO absoluto.
+                    // A veces quedan residuos de 0.00000001, queremos verlos para saber que existen.
+                    if (qty > 0.00000000) {
+
+                        String exName = exchange.length() > 16 ? exchange.substring(0, 16) : exchange;
+
+                        String row = String.format(C + "║ " + P + "%-16s " + C + "║ " + Y + "%-8s " + C + "║ " + G + "%-24s " + C + "║ " + W + "%-15s " + C + "║" + R,
+                                exName.toUpperCase(),
+                                asset,
+                                dfQty.format(qty), // Mostramos 8 decimales
+                                "100%"
+                        );
+                        BotLogger.info(row);
                     }
                 }
             } catch (Exception e) {
-                // Si falla un exchange, no rompemos el reporte, solo lo saltamos
-                sb.append(String.format("║ %-8s ║ ERROR    ║ ⚠ NO CONECTADO      ║                 ║\n", exchange.toUpperCase()));
+                // Si falla MEXC o Kucoin por configuración, saldrá aquí en rojo
+                BotLogger.error("❌ Error leyendo saldo de " + exchange + ": " + e.getMessage());
             }
         }
-
-        sb.append("╚══════════╩══════════╩═════════════════════╩═════════════════╝\n");
-
-        if (assetsFound) {
-            BotLogger.info(sb.toString());
-        } else {
-            BotLogger.info("🏦 [TESORO]: Billeteras vacías o error de lectura.");
-        }
+        BotLogger.info(C + "╚══════════════════╩══════════╩══════════════════════════╩═════════════════╝" + R + "\n");
     }
 }

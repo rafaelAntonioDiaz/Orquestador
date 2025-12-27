@@ -1,17 +1,19 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025.execution;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
-import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.BotConfig;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.ExecutionCoordinator;
 import com.rafaeldiaz.orquestador_gold_rush_2025.model.OrderResult;
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /**
- * ⚡ CROSS TRADE EXECUTOR (Arreglado v5.0 - Blindado con Validación de Inventario)
- * Ejecutor con Atomicidad y Verificación Previa de Fondos.
+ * ⚡ CROSS TRADE EXECUTOR (Versión 1.1 Ninja - Zero Friction)
+ * Ejecución paralela real sin bloqueos de log previos al disparo.
  */
 public class CrossTradeExecutor {
 
@@ -19,6 +21,7 @@ public class CrossTradeExecutor {
     private boolean dryRun = true;
     private final RiskManager riskManager;
     private final ExecutionCoordinator coordinator;
+
     public CrossTradeExecutor(
             ExchangeConnector connector, RiskManager riskManager,
             ExecutionCoordinator coordinator) {
@@ -29,170 +32,97 @@ public class CrossTradeExecutor {
 
     public void setDryRun(boolean dryRun) {
         this.dryRun = dryRun;
-        if(!dryRun) BotLogger.warn("⚠️ CROSS EXECUTOR: MODO FUEGO REAL ACTIVO");
+        if (!dryRun) BotLogger.warn("⚠️ CROSS EXECUTOR: MODO FUEGO REAL ACTIVO");
     }
 
-    /**
-     * Ejecuta con Validación Híbrida (RAM vs API).
-     * @param snapshotTimestamp El momento exacto (System.currentTimeMillis) en que se tomó la foto.
-     */
     public void executeCrossTrade(String buyExchange, String sellExchange, String pair,
-                                  double buyPrice, double sellPrice, double tradeAmount,
-                                  Map<String, Map<String, Double>> balanceSnapshot,
-                                  long snapshotTimestamp) { // ✅ NUEVO ARGUMENTO
+                                  double qty, double buyPriceLog, double sellPriceLog) {
 
-        // 🛑 1. CHECK DE RIESGO
         if (!riskManager.canExecuteTrade()) return;
 
-        // Preparación de datos
-        double rawQty = tradeAmount / buyPrice;
-        double stepSize = connector.getStepSize(buyExchange, pair);
-        final double qty = Math.floor(rawQty / stepSize) * stepSize;
-
-        if (qty <= 0) {
-            BotLogger.error("🚫 Cantidad normalizada inválida.");
-            return;
-        }
-
-        // =================================================================================
-        // 🛡️ 2. VALIDACIÓN DE INVENTARIO INTELIGENTE (Staleness Check)
-        // =================================================================================
-
-        if (!dryRun) {
-            String baseAsset = pair.replace("USDT", "").replace("-", "").toUpperCase();
-            String quoteAsset = "USDT";
-            double estimatedCost = qty * buyPrice;
-
-            // A. Verificamos COMPRADOR (USDT)
-            double buyerUsdtBalance;
-
-            // 🔍 ¿Es viejo el snapshot?
-            if (coordinator.isSnapshotStale(buyExchange, snapshotTimestamp)) {
-                BotLogger.warn("⚠️ Snapshot vencido para " + buyExchange + ". Usando Fetch Live (Lento pero Seguro).");
-                buyerUsdtBalance = connector.fetchBalance(buyExchange, quoteAsset);
-            } else {
-                // Snapshot Fresco -> Usamos RAM
-                buyerUsdtBalance = (balanceSnapshot != null && balanceSnapshot.containsKey(buyExchange))
-                        ? balanceSnapshot.get(buyExchange).getOrDefault(quoteAsset, 0.0) : 0.0;
-            }
-
-            if (buyerUsdtBalance < estimatedCost) {
-                BotLogger.warn("🛑 SKIP: Falta Liquidez en " + buyExchange);
-                return;
-            }
-
-            // B. Verificamos VENDEDOR (Asset)
-            double sellerAssetBalance;
-
-            if (coordinator.isSnapshotStale(sellExchange, snapshotTimestamp)) {
-                BotLogger.warn("⚠️ Snapshot vencido para " + sellExchange + ". Usando Fetch Live.");
-                sellerAssetBalance = connector.fetchBalance(sellExchange, baseAsset);
-            } else {
-                sellerAssetBalance = (balanceSnapshot != null && balanceSnapshot.containsKey(sellExchange))
-                        ? balanceSnapshot.get(sellExchange).getOrDefault(baseAsset, 0.0) : 0.0;
-            }
-
-            if (sellerAssetBalance < qty) {
-                BotLogger.warn("🛑 SKIP: Falta Inventario en " + sellExchange);
-                return;
-            }
-        }
-        // =================================================================================
-
         if (dryRun) {
-            BotLogger.info("[DRY-RUN] Simulación Cross-Exchange " + pair + " (Inventario validado en RAM).");
+            BotLogger.info("[DRY-RUN] Cross: Buy " + buyExchange + " / Sell " + sellExchange + " Qty: " + qty);
             return;
         }
 
-        BotLogger.info(String.format("⚡ EJECUTANDO CROSS: Compra %s | Venta %s | Qty: %.4f", buyExchange, sellExchange, qty));
+        // --- FUEGO PARALELO (ESTÁNDAR JAVA 21+) ---
+        // Usamos un Executor efímero que lanza un Hilo Virtual por cada tarea.
+        // El try-with-resources asegura que se cierre automáticamente al terminar.
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
 
-        // 🚀 3. DISPARO SIMULTÁNEO (ASYNC)
-        CompletableFuture<OrderResult> buyTask = CompletableFuture.supplyAsync(() ->
-                connector.placeOrder(buyExchange, pair, "BUY", "MARKET", qty, 0)
-        );
+            // 1. DISPARAR (FORK)
+            // Enviamos las dos balas al mismo tiempo. No bloquea aquí.
+            Future<OrderResult> fBuy = executor.submit(() ->
+                    connector.placeOrder(buyExchange, pair, "BUY", "MARKET", qty, 0)
+            );
 
-        CompletableFuture<OrderResult> sellTask = CompletableFuture.supplyAsync(() ->
-                connector.placeOrder(sellExchange, pair, "SELL", "MARKET", qty, 0)
-        );
+            Future<OrderResult> fSell = executor.submit(() ->
+                    connector.placeOrder(sellExchange, pair, "SELL", "MARKET", qty, 0)
+            );
 
-        // ⏳ 4. ESPERAR RESULTADOS (JOIN)
-        OrderResult buyResult = null;
-        OrderResult sellResult = null;
+            // 2. RECOLECTAR (JOIN)
+            // .get() esperará a que el hilo virtual termine.
+            // Si hay error en la red, capturamos la excepción de forma segura.
+            OrderResult buyResult = safeGet(fBuy);
+            OrderResult sellResult = safeGet(fSell);
 
-        try {
-            CompletableFuture.allOf(buyTask, sellTask).join();
-            buyResult = buyTask.get();
-            sellResult = sellTask.get();
+            // 3. PROCESAR
+            processResults(buyExchange, buyResult, sellExchange, sellResult, pair, qty);
 
         } catch (Exception e) {
-            BotLogger.error("🔥 Error crítico en hilos de ejecución: " + e.getMessage());
-            // Si explotó el hilo, asumimos culpa de ambos (o del que falló)
-            // Por seguridad, reportamos fallo
-            // (Aquí podrías refinar para saber cuál falló, pero reportar a ambos es seguro)
+            BotLogger.error("🔥 Error Crítico en Executor: " + e.getMessage());
         }
-        // ⚖️ 5. ANÁLISIS DE RESULTADOS
-        boolean buyOk = (buyResult != null && buyResult.isFilled());
-        boolean sellOk = (sellResult != null && sellResult.isFilled());
+    }
+    private void processResults(String buyEx, OrderResult buyRes, String sellEx, OrderResult sellRes, String pair, double originalQty) {
+        boolean buyOk = (buyRes != null && buyRes.isFilled());
+        boolean sellOk = (sellRes != null && sellRes.isFilled());
 
-        if (buyOk) coordinator.reportSuccess(buyExchange);
-        else reportExchangeError(buyExchange, buyResult); // Helper para decidir si es Strike
-
-        if (sellOk) coordinator.reportSuccess(sellExchange);
-        else reportExchangeError(sellExchange, sellResult);
-
+        // A. ÉXITO TOTAL
         if (buyOk && sellOk) {
-            double pnlEstimado = (sellResult.executedQty() * sellResult.averagePrice()) - (buyResult.executedQty() * buyResult.averagePrice());
-            BotLogger.info(String.format("✅ CROSS EXITOSO! PnL Est: $%.2f", pnlEstimado));
-            riskManager.reportTradeResult(pnlEstimado);
-        } else {
-            handlePartialFailure(buyExchange, buyResult, sellExchange, sellResult, pair, qty);
-        }
-    }
+            double pnl = (sellRes.executedValue()) - (buyRes.executedValue());
 
-    private void handlePartialFailure(String buyEx, OrderResult buyRes, String sellEx, OrderResult sellRes, String pair, double qty) {
-        // ... (Mismo código de reversión que antes) ...
-        BotLogger.error("🚨 EJECUCIÓN PARCIAL DETECTADA. INICIANDO PROTOCOLO DE EMERGENCIA.");
+            // Reporte asíncrono
+            Thread.ofVirtual().start(() -> riskManager.reportTradeResult(pnl));
 
-        boolean buyFilled = (buyRes != null && buyRes.isFilled());
-        boolean sellFilled = (sellRes != null && sellRes.isFilled());
-
-        if (buyFilled && !sellFilled) {
-            BotLogger.warn("⚠️ Compramos en " + buyEx + " pero falló venta en " + sellEx);
-            BotLogger.warn("🔄 ROLLBACK: Vendiendo inmediatamente en " + buyEx);
-            double qtyToRollback = buyRes.executedQty();
-            OrderResult rollback = connector.placeOrder(buyEx, pair, "SELL", "MARKET", qtyToRollback, 0);
-            if (rollback.isFilled()) BotLogger.info("✅ ROLLBACK EXITOSO: Posición cerrada en " + buyEx);
-            else BotLogger.error("💀 FATAL: Falló el Rollback. Revisar manual en " + buyEx);
-        }
-        else if (!buyFilled && sellFilled) {
-            BotLogger.warn("⚠️ Vendimos en " + sellEx + " pero falló compra en " + buyEx);
-            BotLogger.warn("🔄 ROLLBACK: Re-comprando inmediatamente en " + sellEx);
-            double qtyToRollback = sellRes.executedQty();
-            OrderResult rollback = connector.placeOrder(sellEx, pair, "BUY", "MARKET", qtyToRollback, 0);
-            if (rollback.isFilled()) BotLogger.info("✅ ROLLBACK EXITOSO: Inventario repuesto en " + sellEx);
-            else BotLogger.error("💀 FATAL: Falló recompra en " + sellEx);
-        }
-    }
-    /**
-     * Analiza por qué falló y decide si castigar al exchange.
-     */
-    private void reportExchangeError(String exchange, OrderResult result) {
-        if (result == null) {
-            // Null significa Timeout o Exception -> STRIKE ❌
-            coordinator.reportFailure(exchange);
+            coordinator.reportSuccess(buyEx);
+            coordinator.reportSuccess(sellEx);
+            BotLogger.info("✅ CROSS WIN: PnL estimado $" + pnl);
             return;
         }
 
-        // Si el exchange respondió pero rechazó la orden:
-        // - "Insufficient Balance" -> NO ES CULPA DEL SISTEMA (No strike)
-        // - "System Error", "Engine Busy", "Timeout" -> SÍ ES CULPA (Strike)
+        // B. FALLO PARCIAL (ROLLBACK)
+        handlePartialFailure(buyEx, buyRes, sellEx, sellRes, pair);
+    }
+    // Método auxiliar para manejar el .get() sin ensuciar la lógica principal con try-catch
+    private OrderResult safeGet(Future<OrderResult> future) {
+        try {
+            return future.get(); // Esto bloquea el hilo virtual, no el del sistema operativo. ¡Eficiente!
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        } catch (ExecutionException e) {
+            BotLogger.error("⚠️ Error en ejecución de orden: " + e.getCause().getMessage());
+            return null;
+        }
+    }
 
-        // Simplificación: Asumimos que si no es FILLED y no es Saldo, es problema técnico.
-        // (Esto depende de cómo parseamos el error en ExchangeConnector, pero por ahora reportamos
-        // fallo si el resultado es nulo o inválido).
 
-        if ("ERROR".equals(result.status())) {
-            coordinator.reportFailure(exchange);
+    private void handlePartialFailure(String buyEx, OrderResult buyRes, String sellEx, OrderResult sellRes, String pair) {
+        boolean buyOk = (buyRes != null && buyRes.isFilled());
+        boolean sellOk = (sellRes != null && sellRes.isFilled());
+
+        if (buyOk && !sellOk) {
+            BotLogger.warn("🔄 ROLLBACK: Vendiendo en " + buyEx + " (Fallo venta en " + sellEx + ")");
+            connector.placeOrder(buyEx, pair, "SELL", "MARKET", buyRes.executedQty(), 0);
+            coordinator.reportFailure(sellEx);
+        }
+        else if (!buyOk && sellOk) {
+            BotLogger.warn("🔄 ROLLBACK: Re-comprando en " + sellEx + " (Fallo compra en " + buyEx + ")");
+            connector.placeOrder(sellEx, pair, "BUY", "MARKET", sellRes.executedQty(), 0);
+            coordinator.reportFailure(buyEx);
+        }
+        else {
+            BotLogger.error("❌ FALLO TOTAL: Ninguna orden entró. (Sin impacto financiero)");
         }
     }
 }

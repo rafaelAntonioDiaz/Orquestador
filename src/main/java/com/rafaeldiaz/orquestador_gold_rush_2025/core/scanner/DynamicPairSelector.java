@@ -2,31 +2,35 @@ package com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.FeeManager;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.PortfolioHealthManager;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.BotConfig;
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.stream.Collectors;
 
 /**
- * 🧠 CEREBRO "OPPORTUNITY HUNTER" (MULTI-FACTOR)
- * Evolución: Ya no solo busca volatilidad. Busca la "Tormenta Perfecta":
- * Volatilidad (ATR) + Spread Ajustado + Liquidez Profunda.
- * Ejecución: Paralela (Virtual Threads) y Respetuosa con API Limits.
+ * 🧠 CEREBRO "DUAL HEARTBEAT" (JAVA 25 OPTIMIZED EDITION)
+ * Arquitectura:
+ * 1. WATCHDOG (High-Freq): I/O Bloqueante delegada a Virtual Threads.
+ * 2. RADAR (Low-Freq): Structured Concurrency para paralelismo masivo.
+ * * Optimizaciones Java 25:
+ * - Sequenced Collections (getFirst/getLast).
+ * - Virtual Thread per Task Executor (Project Loom).
+ * - ZGC Friendly (Short-lived Records).
  */
 public class DynamicPairSelector {
 
     private final ExchangeConnector connector;
     private final MarketListener marketListener;
     private final FeeManager feeManager;
-    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
-    // ⚡ Executor de Hilos Virtuales para I/O masivo sin bloqueo
-    private final ExecutorService virtualExecutor = Executors.newVirtualThreadPerTaskExecutor();
-    private static final double WEIGHT_LIQUIDITY = 0.2;
+    private final PortfolioHealthManager cfo;
 
-    // 🌌 UNIVERSO EXPANDIDO (CANDIDATE PAIRS)
-    // Lista amplia para filtrar. En el futuro, esto podría venir de un fetch "All Tickers".
+    // 🕒 SCHEDULER: Usa hilos de plataforma (OS Threads) solo para cronometrar.
+    // Mantenemos el pool pequeño (2) porque su único trabajo es despertar y delegar.
+    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2, Thread.ofPlatform().factory());
+
+    // 🌌 UNIVERSO DE OBSERVACIÓN
     private static final List<String> CANDIDATE_PAIRS = List.of(
             "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "BNBUSDT",
             "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "SHIBUSDT", "DOTUSDT",
@@ -40,245 +44,187 @@ public class DynamicPairSelector {
             "BONKUSDT", "SEIUSDT", "ORDIUSDT", "FETUSDT", "FLOKIUSDT"
     );
 
-    // Configuración de Pesos (Tuning del Advisor)
+    // Pesos del Radar
     private static final double WEIGHT_ATR = 0.4;
     private static final double WEIGHT_SPREAD = 0.4;
+    private static final double WEIGHT_LIQUIDITY = 0.2;
 
-    public DynamicPairSelector(ExchangeConnector connector, MarketListener marketListener, FeeManager feeManager) {
+    public DynamicPairSelector(ExchangeConnector connector, MarketListener marketListener,
+                               FeeManager feeManager, PortfolioHealthManager cfo) {
         this.connector = connector;
         this.marketListener = marketListener;
         this.feeManager = feeManager;
+        this.cfo = cfo;
     }
 
     public void start() {
-        BotLogger.info("🧠 INICIANDO CEREBRO MULTI-FACTOR (Scan cada 5 min)...");
-        // Ciclo de baja frecuencia (5 min) para análisis profundo
-        scheduler.scheduleAtFixedRate(this::scanUniverse, 0, 5, TimeUnit.MINUTES);
+        BotLogger.info("🧠 CEREBRO DUAL ACTIVADO: Optimizaciones Java 25 cargadas.");
+
+        // 💓 CICLO 1: WATCHDOG (30s)
+        // Patrón: "Fire-and-Forget Virtual Thread".
+        // El scheduler dispara el evento, pero el trabajo pesado se va a un hilo virtual.
+        scheduler.scheduleWithFixedDelay(() ->
+                        Thread.ofVirtual().name("Watchdog-Worker").start(this::executeWatchdogRoutine),
+                0, 30, TimeUnit.SECONDS
+        );
+
+        // 🔭 CICLO 2: RADAR (5m)
+        // Patrón: "Structured Concurrency Scope".
+        scheduler.scheduleWithFixedDelay(() ->
+                        Thread.ofVirtual().name("Radar-Worker").start(this::executeRadarRoutine),
+                1, 5, TimeUnit.MINUTES
+        );
     }
 
     public void stop() {
-        scheduler.shutdown();
-        virtualExecutor.shutdown();
+        scheduler.shutdownNow();
         BotLogger.info("🧠 Cerebro detenido.");
     }
 
-    private void scanUniverse() {
-        BotLogger.info("🔭 ESCANEANDO UNIVERSO (" + CANDIDATE_PAIRS.size() + " pares)...");
-        long startTime = System.currentTimeMillis();
-
+    // =========================================================================
+    // 🐕 RUTINA 1: WATCHDOG (Gestión de Inventario)
+    // =========================================================================
+    private void executeWatchdogRoutine() {
         try {
-            // 1. Lanzar tareas paralelas (Scatter)
+            // El CFO hace llamadas de red (fetchBalances). Al correr en un hilo virtual,
+            // si la API tarda, el hilo se "desmonta" del carrier thread, permitiendo
+            // que la CPU siga trabajando en otras cosas. 100% Non-Blocking I/O implícito.
+            List<String> liveAssets = cfo.discoverTradableAssets();
+
+            if (!liveAssets.isEmpty()) {
+                marketListener.updateTargets(liveAssets);
+            }
+        } catch (Exception e) {
+            BotLogger.error("🐕 Error en Watchdog: " + e.getMessage());
+        }
+    }
+
+    // =========================================================================
+    // 📡 RUTINA 2: RADAR (Inteligencia de Mercado)
+    // =========================================================================
+    private void executeRadarRoutine() {
+        BotLogger.info("🔭 RADAR: Escaneando Universo (" + CANDIDATE_PAIRS.size() + " activos)...");
+        long start = System.currentTimeMillis();
+
+        // 🚀 STRUCTURED CONCURRENCY (Implicit Scope)
+        // try-with-resources garantiza que el Executor se cierre y limpie al terminar el bloque.
+        try (var scope = Executors.newVirtualThreadPerTaskExecutor()) {
+
+            // 1. Scatter (Lanzamiento Masivo)
             List<Callable<OpportunityScore>> tasks = CANDIDATE_PAIRS.stream()
-                    .map(pair -> (Callable<OpportunityScore>) () -> calculateScore(pair))
+                    .map(pair -> (Callable<OpportunityScore>) () -> analyzeMarketCandidate(pair))
                     .toList();
 
-            // 2. Esperar resultados (Gather)
-            List<Future<OpportunityScore>> futures = virtualExecutor.invokeAll(tasks);
+            // 2. Gather (Recolección Bloqueante Virtual)
+            // invokeAll bloquea el hilo virtual "Radar-Worker", pero NO un hilo del sistema.
+            List<Future<OpportunityScore>> futures = scope.invokeAll(tasks);
+
             List<OpportunityScore> scores = new ArrayList<>();
 
             for (Future<OpportunityScore> f : futures) {
                 try {
-                    OpportunityScore result = f.get();
-                    if (result != null && result.score > 0) {
-                        scores.add(result);
-                        // 🔥 ALERTA HOT PAIR
-                        if (result.score > 0.8) {
-                            BotLogger.sendTelegram("🔥 PAIR CALIENTE: "
-                                    + result.pair + " (Score: "
-                                    + String.format("%.2f", result.score) + ")");
+                    // get() lanzaría excepción si la tarea falló, lo capturamos abajo
+                    OpportunityScore res = f.get();
+                    if (res != null && res.score > 0) {
+                        scores.add(res);
+                        // 🔥 Hot Alert
+                        if (res.score > 0.85) {
+                            BotLogger.sendTelegram("🚀 RADAR DETECT: " + res.pair()
+                                    + " | Score: " + String.format("%.2f", res.score()));
                         }
                     }
-                } catch (Exception ignored) {
-                    // Fallo silencioso por par (Rate Limit o Red), no aborta el ciclo
+                } catch (ExecutionException | InterruptedException ignored) {
+                    // Fail-Safe: Si un par falla (timeout/error), ignoramos y seguimos.
                 }
             }
 
-            // 3. Selección de la Élite (Top 10)
+            // 3. Reporting
+            // Usamos List.sort directo (Java 8+)
             scores.sort(Comparator.comparingDouble(OpportunityScore::score).reversed());
 
-            List<String> topTargets = scores.stream()
-                    .limit(15) //  Top 15
-                    .map(OpportunityScore::pair)
-                    .collect(Collectors.toList());
+            // Stream con limit para reporte
+            logIntelligenceReport(scores.stream().limit(10).toList());
 
-            // Reporte de Inteligencia
-            logAnalysis(scores, topTargets);
-
-            // 4. Actualización Asíncrona
-            if (!topTargets.isEmpty()) {
-                marketListener.updateTargets(topTargets);
-            }
-
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
         } catch (Exception e) {
-            BotLogger.error("🔥 Error crítico en Scan Universe: " + e.getMessage());
+            BotLogger.error("🔭 Error en Radar: " + e.getMessage());
         } finally {
-            BotLogger.info("⏱️ Scan completado en " + (System.currentTimeMillis() - startTime) + "ms");
+            BotLogger.info("⏱️ Radar finalizado en " + (System.currentTimeMillis() - start) + "ms");
         }
     }
 
     /**
-     * Tarea atómica: Analiza un solo par con VISION DE RAYOS X (Order Book).
-     * Cumple recomendación Advisor: ATR + AvgSpread + Liquidity Depth.
+     * 🔬 ANÁLISIS DE CANDIDATO
      */
-    private OpportunityScore calculateScore(String pair) {
+    private OpportunityScore analyzeMarketCandidate(String pair) {
         try {
-            String refExchange = BotConfig.ADVISOR_REF_EXCHANGE;    // exchange de referencia
-            // ============================================================
-            // 1.  FILTRO DE TENDENCIA (Gatekeeper)
-            // ============================================================
-            if (BotConfig.isSpatialStrategy()) { // Solo activamos esto en modo ESPACIAL
-                double currentEMA = calculateTrendEMA(pair);
+            String refExchange = BotConfig.ADVISOR_REF_EXCHANGE;
 
-                // Obtenemos precio actual rápido (usamos el ticker o la última vela)
-                // Para ser precisos, usamos el último precio conocido del cálculo EMA o fetch rápido
-                Map<String, Double> prices = connector.fetchAllPrices(refExchange); // O fetchTicker si es más ligero
-                Double currentPrice = prices.get(pair);
+            // A. Volatilidad (ATR 1m)
+            List<double[]> candles = connector.fetchCandles(refExchange, pair, "1m", 5);
 
-                if (currentPrice != null && currentEMA > 0) {
-                    if (currentPrice < currentEMA) {
-                        // ⛔ PRECIO BAJO LA EMA -> TENDENCIA BAJISTA -> RECHAZAR
-                        // BotLogger.debug("📉 Rechazo por Tendencia: " + pair + " ($" + currentPrice + " < EMA $" + String.format("%.4f", currentEMA) + ")");
-                        return null;
-                    }
-                }
-            }
-            // ============================================================
-            // 2.  VOLATILIDAD (ATR)
-            List<double[]> candles = connector.fetchCandles(refExchange, pair, "1", 5);
+            // ✅ JAVA 21+: Sequenced Collections check
             if (candles == null || candles.isEmpty()) return null;
 
+            // Uso de getLast() en lugar de get(size-1) -> Más limpio y seguro
+            double[] lastCandle = candles.getLast();
+
+            // Fallback índice de cierre (4=Close standard, 2=High fallback)
+            double lastPrice = lastCandle.length > 4 ? lastCandle[4] : lastCandle[2];
+
             double atrSum = 0;
-            double lastPrice = candles.get(candles.size() - 1)[2];
-            for (double[] c : candles) atrSum += (c[0] - c[1]);
+            for(double[] c : candles) atrSum += (c[2] - c[3]); // High - Low
+            double atrPercent = ((atrSum/candles.size()) / lastPrice) * 100.0;
 
-            double atrRaw = atrSum / candles.size();
-            double atrPercent = (atrRaw / lastPrice) * 100.0;
+            if (atrPercent < 0.15) return null; // Dead market check
 
-            //  3. PROFUNDIDAD REAL (Advisor: "fetch order book bid/ask avg, liquidity sum")
-            // Pedimos profundidad 10 para evaluar liquidez cercana
+            // B. OrderBook Analysis
             ExchangeConnector.OrderBook book = connector.fetchOrderBook(refExchange, pair, 10);
+            if (book == null || book.bids().isEmpty()) return null;
 
-            if (book.bids() == null || book.bids().isEmpty() || book.asks() == null || book.asks().isEmpty()) {
-                return null; // Mercado vacío o error de lectura
-            }
+            // ✅ Sequenced Collections: Acceso al mejor Bid/Ask
+            double bestBid = book.bids().getFirst()[0];
+            double bestAsk = book.asks().getFirst()[0];
 
-            // A. Spread Real & NETO
-            double bestBid = book.bids().get(0)[0];
-            double bestAsk = book.asks().get(0)[0];
             double spreadPercent = ((bestAsk - bestBid) / bestBid) * 100.0;
 
-            // Consultamos el Fee REAL de Taker (Ya que el arbitraje agresivo suele ser Taker)
-            // Multiplicamos por 2 (Entrada + Salida estimada)
-            double realTakerFee = feeManager.getTradingFee(refExchange, pair, "TAKER");
-            double totalRealFeePercent = (realTakerFee * 2) * 100.0; // Convertir a porcentaje
+            double fee = feeManager.getTradingFee(refExchange, pair, "TAKER");
+            double netSpread = spreadPercent - (fee * 200.0);
 
-            // Cálculo preciso
-            double netSpread = spreadPercent - totalRealFeePercent;
-            // B. Liquidez (Depth USD sum bids/asks)
-            // Sumamos cuánto dinero hay disponible para comprar/vender en los primeros niveles
-            double liquidityUSD = 0.0;
-            for (double[] b : book.bids()) liquidityUSD += (b[0] * b[1]); // Precio * Cantidad
-            for (double[] a : book.asks()) liquidityUSD += (a[0] * a[1]);
+            // C. Liquidez
+            double liqUSD = 0;
+            for(double[] b : book.bids()) liqUSD += b[0]*b[1];
 
-            // 4. SCORING MULTI-FACTOR
+            if (liqUSD < 15_000) return null;
 
-            // Factor Liquidez: Normalizamos.
-            // Si hay > $500k USD en el libro (top 10), es liquidez perfecta (Score 1.0).
-            // Si hay $50k, es Score 0.1. Esto penaliza monedas "zombies".
-            double liquidityScore = Math.min(liquidityUSD / 500_000.0, 1.0);
+            // Scoring
+            double sVol = Math.min(atrPercent, 5.0) / 5.0;
+            double sSpread = Math.min(Math.max(netSpread, 0), 2.0) / 2.0;
+            double sLiq = Math.min(liqUSD / 500_000.0, 1.0);
 
-            // Factor Spread: Ahora premiamos el spread amplio (porque es arbitrage)
-            // Si el spread neto es 2%, score es 1.0 (máximo).
-            double spreadScore = Math.min(netSpread / 2.0, 1.0);
-            if (spreadScore < 0) spreadScore = 0;
-
-            // Factor Volatilidad: Buscamos movimiento pero no caos absoluto
-            double volScore = Math.min(atrPercent, 5.0) / 5.0; // Cap en 5% para normalizar
-
-            // FÓRMULA DEL ADVISOR
-            double finalScore = (volScore * WEIGHT_ATR) +
-                    (spreadScore * WEIGHT_SPREAD) +
-                    (liquidityScore * WEIGHT_LIQUIDITY);
-
-            // Filtros de Calidad Mínima (Safety Checks)
-            if (atrPercent < 0.1) return null;      // Muy quieto
-            if (liquidityUSD < 10_000) return null; // Peligrosamente ilíquido (<$10k en libro)
+            double finalScore = (sVol * WEIGHT_ATR) + (sSpread * WEIGHT_SPREAD) + (sLiq * WEIGHT_LIQUIDITY);
 
             return new OpportunityScore(pair, finalScore, atrPercent, spreadPercent);
 
         } catch (Exception e) {
-            return null;
+            return null; // El scope general maneja los nulos
         }
     }
 
-    private void logAnalysis(List<OpportunityScore> scores, List<String> top) {
-        StringBuilder sb = new StringBuilder("\n📊 REPORTE DE INTELIGENCIA DE MERCADO:\n");
-        sb.append("   Candidatos Analizados: ").append(scores.size()).append("\n");
-        sb.append("   👑 ELITE SELECCIONADA (Top ").append(top.size()).append("):\n");
-
-        for (int i = 0; i < Math.min(5, scores.size()); i++) {
-            OpportunityScore s = scores.get(i);
-            sb.append(String.format("   #%d %-8s | Score: %5.2f | ATR: %4.2f%% | Spread: %4.2f%%\n",
-                    i+1, s.pair, s.score, s.atrPercent, s.spreadPercent));
+    private void logIntelligenceReport(List<OpportunityScore> top) {
+        StringBuilder sb = new StringBuilder("\n📡 RADAR DE OPORTUNIDADES (Para Humano):\n");
+        if (top.isEmpty()) {
+            sb.append("   (El mercado está dormido, sin candidatos claros)\n");
+        } else {
+            for (int i = 0; i < top.size(); i++) {
+                OpportunityScore s = top.get(i);
+                sb.append(String.format("   💡 #%d %-8s | Score: %4.2f | Spread: %5.2f%% | Vol: %4.2f%%\n",
+                        i + 1, s.pair, s.score, s.spreadPercent, s.atrPercent));
+            }
+            sb.append("\n   👉 Si inyectas saldo en estos activos, el Watchdog los activará en 30s.\n");
         }
         BotLogger.info(sb.toString());
     }
 
-    // Record interno para pasar datos
+    // ✅ JAVA 16+ RECORD: Inmutabilidad nativa para ZGC
     private record OpportunityScore(String pair, double score, double atrPercent, double spreadPercent) {}
-    /**
-     * 📉 MOTOR DE TENDENCIA
-     * Calcula la EMA (Exponential Moving Average) para determinar la salud del activo.
-     * Retorna:
-     * > 0 : El valor de la EMA (Tendencia calculada).
-     * -1  : Error o datos insuficientes.
-     */
-    private double calculateTrendEMA(String pair) {
-        try {
-            int period = BotConfig.TREND_EMA_PERIOD; // 50
-            String timeframe = BotConfig.TREND_TIMEFRAME; // 15m
-
-            // 1. Pedimos datos históricos (Periodo + 20 velas de colchón para suavizar el inicio)
-            List<double[]> candles = connector.fetchCandles(BotConfig.ADVISOR_REF_EXCHANGE, pair, timeframe, period + 20);
-
-            if (candles == null || candles.size() < period) {
-                return -1; // No hay suficientes datos para decidir
-            }
-
-            // 2. Extraemos precios de CIERRE (Asumiendo formato estándar OHLCV: [4] = Close)
-            // NOTA: Si su conector usa otro índice para el precio de cierre, ajústelo aquí.
-            List<Double> closes = new ArrayList<>();
-            for (double[] c : candles) {
-                // Verifique en su ExchangeConnector qué índice es el precio de cierre.
-                // Usualmente: 0=Time, 1=Open, 2=High, 3=Low, 4=Close
-                if (c.length > 4) closes.add(c[4]);
-                else closes.add(c[2]); // Fallback si usa formato corto [High, Low, Close]
-            }
-
-            // 3. Cálculo Matemático de la EMA
-            // A. Primero SMA (Promedio Simple) de los primeros N elementos
-            double sum = 0;
-            for (int i = 0; i < period; i++) {
-                sum += closes.get(i);
-            }
-            double ema = sum / period;
-
-            // B. Multiplicador de Peso (K)
-            double multiplier = 2.0 / (period + 1);
-
-            // C. Proyectar la EMA sobre el resto de datos hasta hoy
-            for (int i = period; i < closes.size(); i++) {
-                double price = closes.get(i);
-                ema = ((price - ema) * multiplier) + ema;
-            }
-
-            return ema;
-
-        } catch (Exception e) {
-            BotLogger.warn("⚠️ Error calculando EMA para " + pair + ": " + e.getMessage());
-            return -1;
-        }
-    }
 }
