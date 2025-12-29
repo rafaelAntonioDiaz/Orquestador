@@ -5,23 +5,21 @@ import com.rafaeldiaz.orquestador_gold_rush_2025.model.OrderResult;
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 
 /**
- * 📐 TRIANGULAR EXECUTOR (PURE MUSCLE - JAVA 25)
- * Responsabilidad: Ejecución atómica secuencial.
- * Eliminado: Lógica de escaneo, formateo de logs en ruta crítica.
+ * 📐 TRIANGULAR EXECUTOR (STATELESS & ATOMIC)
+ * Responsabilidad: Ejecución ciega. Recibe Strings ya construidos.
+ * No concatena, no piensa. Solo dispara.
  */
 public class TriangularExecutor {
 
     private final ExchangeConnector connector;
-    private final String exchangeName;
     private boolean dryRun = true;
 
-    // Buffers de seguridad (Constants en memoria para evitar accesos a config en hot-path)
-    private static final double BUFFER_ENTRY = 0.995; // 0.5% margen en entrada
-    private static final double BUFFER_EXIT = 0.999;  // 0.1% margen en salida (rounding errors)
+    // Buffers de seguridad (Hardcoded para velocidad)
+    private static final double BUFFER_ENTRY = 0.995;
+    private static final double BUFFER_EXIT = 0.999;
 
-    public TriangularExecutor(ExchangeConnector connector, String exchangeName) {
+    public TriangularExecutor(ExchangeConnector connector) {
         this.connector = connector;
-        this.exchangeName = exchangeName;
     }
 
     public void setDryRun(boolean dryRun) {
@@ -29,29 +27,26 @@ public class TriangularExecutor {
     }
 
     /**
-     * Ejecuta la triangulación VALIDADA.
-     * @param p1 Pair String (ej: "BTCUSDT") - Pre-construido por el Scanner
-     * @param p2 Pair String (ej: "BTCETH")  - Pre-construido
-     * @param p3 Pair String (ej: "ETHUSDT") - Pre-construido
-     * @param limitPrice1 Precio detectado por el scanner para calcular cantidad
+     * ⚡ EXECUTE SEQUENCE (Zero-Allocation)
+     * Recibe los pares YA construidos por el Scanner para evitar latencia de String Builder.
      */
-    public void executeSequence(String asset, String bridge, String p1, String p2, String p3,
+    public void executeSequence(String exchangeName, String asset, String bridge,
+                                String p1, String p2, String p3,
                                 double capitalUsdt, double limitPrice1) {
 
-        if (dryRun) {
-            BotLogger.info("[DRY-RUN] Triangular ejecutada: " + asset + "-" + bridge);
-            return;
-        }
+        // TODO: Comentar este log en producción para ganar ~50 micros
+        // if (dryRun) BotLogger.info("[DRY] Triangular trigger: " + asset + "-" + bridge);
+
+        if (dryRun) return;
 
         // --- PASO 1: ENTRY (USDT -> ASSET) ---
-        // Cálculo puro (nanosegundos)
         double quantity1 = (capitalUsdt / limitPrice1) * BUFFER_ENTRY;
 
         // Fuego 1
         OrderResult r1 = connector.placeOrder(exchangeName, p1, "BUY", "MARKET", quantity1, 0);
 
         if (!r1.isFilled()) {
-            BotLogger.warn("⚠️ Triangular abortada en P1: " + asset);
+            BotLogger.warn("⚠️ Triangular abortada en P1 (" + exchangeName + ")");
             return;
         }
 
@@ -62,14 +57,13 @@ public class TriangularExecutor {
         OrderResult r2 = connector.placeOrder(exchangeName, p2, "SELL", "MARKET", acquiredAsset, 0);
 
         if (!r2.isFilled()) {
-            // CRÍTICO: Fallo en mitad de la operación
-            handleEmergencyExit(asset, p1, acquiredAsset);
+            handleEmergencyExit(exchangeName, asset, p1, acquiredAsset);
             return;
         }
 
         double acquiredBridge = r2.executedValue();
 
-        // Safety check (si la API es lenta devolviendo value, consultamos balance)
+        // Safety check (costoso, solo si falla la API en devolver value)
         if (acquiredBridge <= 0.0000001) {
             acquiredBridge = connector.fetchBalance(exchangeName, bridge);
         }
@@ -80,19 +74,18 @@ public class TriangularExecutor {
         OrderResult r3 = connector.placeOrder(exchangeName, p3, "SELL", "MARKET", bridgeToSell, 0);
 
         if (r3.isFilled()) {
-            double finalUsdt = r3.executedValue();
-            double profit = finalUsdt - capitalUsdt;
-            // Log asíncrono o simplificado
+            double profit = r3.executedValue() - capitalUsdt;
+            // Log asíncrono post-mortem
             BotLogger.logTrade("TRIANGULAR_" + asset + "_" + bridge, "WIN", 0, profit);
         } else {
-            // Intento final desesperado ("Sweep")
+            // Sweep final de emergencia
             double realBal = connector.fetchBalance(exchangeName, bridge);
             connector.placeOrder(exchangeName, p3, "SELL", "MARKET", realBal, 0);
         }
     }
 
-    private void handleEmergencyExit(String asset, String pairUsdt, double qty) {
-        BotLogger.error("🚑 EMERGENCY EXIT: Vendiendo " + asset + " a USDT");
+    private void handleEmergencyExit(String exchangeName, String asset, String pairUsdt, double qty) {
+        BotLogger.error("🚑 EMERGENCY EXIT: Vendiendo " + asset + " a USDT en " + exchangeName);
         connector.placeOrder(exchangeName, pairUsdt, "SELL", "MARKET", qty, 0);
     }
 }

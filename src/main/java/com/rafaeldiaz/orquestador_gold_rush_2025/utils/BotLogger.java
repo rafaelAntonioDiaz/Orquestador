@@ -1,5 +1,7 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025.utils;
 
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.telemetry.DashboardRenderer;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.telemetry.MetricsService;
 import io.github.cdimascio.dotenv.Dotenv;
 import okhttp3.*;
 import java.io.File;
@@ -107,10 +109,33 @@ public class BotLogger {
             consumerThread.setName("Async-Log-Worker");
             consumerThread.setDaemon(true);
             consumerThread.start();
+            Thread dashboardThread = Thread.ofVirtual().name("dashboard-ui").start(() -> {
+                while (true) {
+                    try {
+                        // Espera 60 segundos
+                        Thread.sleep(60_000);
+
+                        // Genera el cuadro
+                        String dashboard = DashboardRenderer.render(MetricsService.get());
+
+                        // Lo inyectamos directo en la cola de logs para que salga sincronizado
+                        // Usamos logTasks.offer para no bloquear
+                        logTasks.offer(() -> {
+                            // Imprimimos directo a System.out para saltarnos el formato de fecha/nivel del Logger
+                            // y que el cuadro se vea limpio.
+                            System.out.println(dashboard);
+                        });
+
+                    } catch (InterruptedException e) {
+                        break;
+                    }
+                }
+            });
 
         } catch (IOException e) {
             System.err.println("FATAL LOG ERROR: " + e.getMessage());
         }
+
     }
 
     // Método auxiliar para detectar arte ASCII ignorando colores ANSI
@@ -123,6 +148,23 @@ public class BotLogger {
     public static void info(String msg) { logTasks.offer(() -> logger.info(msg)); }
     public static void warn(String msg) { logTasks.offer(() -> logger.warning(msg)); }
     public static void error(String msg) { logTasks.offer(() -> { logger.severe(msg); sendTelegram("🚨 ERROR: " + msg); }); }
+    /**
+     * 💰 LOG DE NEGOCIO (Alta Prioridad)
+     * Se usa para anunciar dinero entrante o oportunidades confirmadas.
+     * Se imprime en MAGENTA y se envía a Telegram.
+     */
+    public static void trade(String msg) {
+        logTasks.offer(() -> {
+            // Usamos el color PURPLE (Magenta) definido en tus constantes para destacar
+            String logMsg = PURPLE + "💰 " + msg + RESET;
+
+            // Registramos en el logger del sistema
+            logger.info(logMsg);
+
+            // Enviamos a Telegram con prioridad
+            sendTelegram("💰 " + msg);
+        });
+    }
 
     public static void logTrade(String pair, String type, double profitPercent, double amountUSDT) {
         logTasks.offer(() -> {
@@ -175,5 +217,34 @@ public class BotLogger {
                 pw.println("Timestamp,Strategy,Asset,Route,Gross_Spread_Pct,Net_Profit_Usd,Status,Reason");
             } catch (IOException e) { logger.severe("No se pudo crear cabecera Opportunity CSV"); }
         }
+    }
+    /**
+     * 📸 REGISTRA EVENTOS DE SISTEMA EN EL CSV DE OPORTUNIDADES
+     * Permite marcar el Inicio y Fin de pruebas en la misma línea de tiempo que los trades.
+     */
+    public static void logSystemEvent(String eventType, String details) {
+        logTasks.offer(() -> {
+            String date = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+
+            // Log Visual en Consola
+            logger.info(PURPLE + "💾 SYSTEM EVENT: " + eventType + " | " + details + RESET);
+
+            // Inyección en CSV (Usamos columnas genéricas para no romper el formato)
+            // Columnas: Timestamp, Strategy, Asset, Route, Gross, Net, Status, Reason
+            try (PrintWriter pw = new PrintWriter(new FileWriter(OPPORTUNITY_FILE, true))) {
+                pw.printf(Locale.US, "%s,%s,%s,%s,%.4f,%.4f,%s,%s%n",
+                        date,
+                        "SYSTEM",       // Strategy -> SYSTEM
+                        "ALL",          // Asset -> ALL
+                        "GLOBAL",       // Route -> GLOBAL
+                        0.0,            // Gross -> 0
+                        0.0,            // Net -> 0
+                        eventType,      // Status -> TEST_START / TEST_END
+                        details         // Reason -> Parámetros o Resultados
+                );
+            } catch (IOException e) {
+                logger.severe("System Event Log Error: " + e.getMessage());
+            }
+        });
     }
 }

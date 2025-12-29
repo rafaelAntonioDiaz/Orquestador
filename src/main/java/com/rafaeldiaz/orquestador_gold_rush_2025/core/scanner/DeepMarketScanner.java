@@ -1,17 +1,22 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.FeeManager;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.GlobalBalanceReporter;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.PortfolioHealthManager;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.BotConfig;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.ExecutionCoordinator;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.telemetry.MetricsService;
 import com.rafaeldiaz.orquestador_gold_rush_2025.execution.CrossTradeExecutor;
 import com.rafaeldiaz.orquestador_gold_rush_2025.execution.RiskManager;
 import com.rafaeldiaz.orquestador_gold_rush_2025.execution.TradeExecutor;
+import com.rafaeldiaz.orquestador_gold_rush_2025.execution.TriangularExecutor;
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 
 import java.text.DecimalFormat;
+import java.time.Instant;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -35,7 +40,7 @@ public class DeepMarketScanner implements MarketListener {
     private static final boolean AUTO_EXECUTE_ENABLED = false;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     private final ExecutorService virtualExecutor = Executors.newVirtualThreadPerTaskExecutor();
-    private final ExecutorService balanceExecutor = Executors.newFixedThreadPool(4);
+    private final TriangularExecutor triangularExecutor;
     // 🔧 CONFIGURACIÓN CIENTÍFICA
     // Simularemos todos estos escenarios simultáneamente con el mismo Order Book
     private final List<Double> testCapitals;
@@ -59,11 +64,18 @@ public class DeepMarketScanner implements MarketListener {
     private Map<String, Map<String, Double>> cachedBalances = new ConcurrentHashMap<>();
     private long lastBalanceUpdate = 0;
     // 📚 CACHÉ DE ORDERBOOKS (2 segundos de vida)
-    private final Map<String, CachedOrderBook> orderBookCache = new ConcurrentHashMap<>();
-    private static final long ORDERBOOK_TTL_MS = 2000; // 2 segundos por meter en botlogger
+    private final Cache<String, CachedOrderBook> orderBookCache = Caffeine.newBuilder()
+            .maximumSize(1000) // Suficiente para 200 pares x 5 exchanges
+            .expireAfterWrite(5000, TimeUnit.MILLISECONDS) // 5 segundos de vida (TTL)
+            .recordStats() // Útil para el reporte de telemetría
+            .build();    // Aumentamos a 5s para que los datos del Prefetch no caduquen antes de ser usados
     private record CachedOrderBook(ExchangeConnector.OrderBook book, long timestamp) {}
-    // Configuración: Refrescar saldos solo cada 60 segundos si no hay trades
-    private static final long BALANCE_TTL_MS = 60_000;
+    // ✈️ CONTROL DE TRÁFICO AÉREO: Evita peticiones duplicadas en el mismo milisegundo
+    private final Map<String, CompletableFuture<ExchangeConnector.OrderBook>>
+            inflightBookRequests = new ConcurrentHashMap<>();
+    // ⚡ OPTIMIZACIÓN HFT: Refresco de saldos cada 5 segundos.
+    // Garantiza que el Scanner nunca trabaje con "dinero fantasma".
+    private static final long BALANCE_TTL_MS = 5_000;
 
     // Bandera para forzar actualización inmediata (post-trade)
     private volatile boolean forceBalanceUpdate = true;
@@ -81,8 +93,7 @@ public class DeepMarketScanner implements MarketListener {
             bestOpportunityLogRef = new java.util.concurrent.atomic.AtomicReference<>("Buscando...");
     private final DateTimeFormatter timeFmt = DateTimeFormatter.ofPattern("HH:mm:ss");
 
-    public DeepMarketScanner(ExchangeConnector connector, ExecutionCoordinator coordinator) {
-        this.connector = connector;
+    public DeepMarketScanner(ExchangeConnector connector, ExecutionCoordinator coordinator) {        this.connector = connector;
         this.coordinator = coordinator; // Guardamos referencia
 
         this.feeManager = new FeeManager(connector);
@@ -99,8 +110,8 @@ public class DeepMarketScanner implements MarketListener {
         this.crossExecutor = new CrossTradeExecutor(connector, riskPolice, coordinator);
 
         this.crossExecutor.setDryRun(BotConfig.DRY_RUN);
-// this.crossExecutor.setDryRun(BotConfig.DRY_RUN); <---- Esta línea es la de Producción !!!
-
+        this.triangularExecutor = new TriangularExecutor(connector);
+        this.triangularExecutor.setDryRun(BotConfig.DRY_RUN);
         // -----------------------------------------------------------
         // 🧪 CONFIGURACIÓN CIENTÍFICA (MODO STRESS TEST)
         // -----------------------------------------------------------
@@ -170,7 +181,7 @@ public class DeepMarketScanner implements MarketListener {
 
                 try {
                     // 5. Inyectamos el delay
-                    Thread.sleep(BotConfig.SCAN_DELAY);
+                    Thread.sleep(BotConfig.MAX_LATENCY_MS);
                 } catch (InterruptedException e) {
                     break;
                 }
@@ -178,38 +189,168 @@ public class DeepMarketScanner implements MarketListener {
             finalizeScan();
         });
     }
-    // ✅ 2. ACTUALIZAR ESTE MÉTODO (Aquí nace el timestamp)
+    // ⚡ SCANNER V2.2 (CON TELEMETRÍA DE RENDIMIENTO SEPARADA)
+    // ⚡ SCANNER V2.3 (CON PREFETCH ESPECULATIVO)
     private void scanFullMatrixBatchOptimized() {
-        refreshBalancesResult(); // 1. Actualizar caché
+        // 🛑 PREVENCIÓN DE CRASH AL APAGAR
+        if (virtualExecutor.isShutdown() || virtualExecutor.isTerminated()) {
+            return;
+        }
+        // ┌─────────────────────────────────────────────────────────────┐
+        // │ 🛑 [TELEMETRY START]                                        │
+        // └─────────────────────────────────────────────────────────────┘
+        long startCycle = System.nanoTime();
+        // ───────────────────────────────────────────────────────────────
+
+        refreshBalancesResult();
 
         Map<String, Map<String, Double>> marketData = new ConcurrentHashMap<>();
-
-        // ⏰ TIMESTAMP DE NACIMIENTO (Runtime)
         long snapshotTimestamp = System.currentTimeMillis();
 
-        exchanges.parallelStream().forEach(ex -> {
+        // ┌─────────────────────────────────────────────────────────────┐
+        // │ 🛑 [TELEMETRY START] - INICIO I/O (Precios)                 │
+        // └─────────────────────────────────────────────────────────────┘
+        long startIO = System.nanoTime();
+        // ───────────────────────────────────────────────────────────────
+
+        // ---------------------------------------------------------
+        // 🚀 FASE 1: DESCARGA DE PRECIOS SIMPLE (TICKERS)
+        // ---------------------------------------------------------
+        try (var ioExecutor = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<Callable<Void>> fetchTasks = exchanges.stream()
+                    .map(ex -> (Callable<Void>) () -> {
+                        try {
+                            Map<String, Double> prices = connector.fetchAllPrices(ex);
+                            if (prices != null && !prices.isEmpty()) marketData.put(ex, prices);
+                        } catch (Exception e) { /* Silent or Log */ }
+                        return null;
+                    }).toList();
+
             try {
-                Map<String, Double> prices = connector.fetchAllPrices(ex);
-                if (!prices.isEmpty()) marketData.put(ex, prices);
-            } catch (Exception e) { /* Silent fail */ }
-        });
+                ioExecutor.invokeAll(fetchTasks, 4500, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+
+
+            // ---------------------------------------------------------
+            // 🚀 FASE 1.5: PREFETCH "CARPET BOMBING" (SILENCIOSO)
+            // ---------------------------------------------------------
+            if (!marketData.isEmpty()) {
+                List<Callable<Void>> prefetchTasks = new ArrayList<>();
+
+                for (String asset : huntingGrounds) {
+                    String basePair = asset + "USDT";
+                    for (String ex : exchanges) {
+                        Map<String, Double> prices = marketData.get(ex);
+                        if (prices == null) continue;
+
+                        if (prices.containsKey(basePair)) {
+                            // 👇 AQUÍ ESTÁ EL CAMBIO: 'true' al final para activar SILENCIO
+                            prefetchTasks.add(() -> { fetchOrderBookCachedInternal(ex, basePair, 20, true); return null; });
+
+                            for (String bridge : BRIDGE_ASSETS) {
+                                String crossPair = asset + bridge;
+                                String bridgePair = bridge + "USDT";
+
+                                if (prices.containsKey(crossPair)) {
+                                    // 👇 SILENCIO
+                                    prefetchTasks.add(() -> { fetchOrderBookCachedInternal(ex, crossPair, 20, true); return null; });
+                                }
+                                if (prices.containsKey(bridgePair)) {
+                                    // 👇 SILENCIO
+                                    prefetchTasks.add(() -> { fetchOrderBookCachedInternal(ex, bridgePair, 20, true); return null; });
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 🔥 DISPARO MASIVO (Timeout 2.5s)
+                if (!prefetchTasks.isEmpty()) {
+                    try {
+                        ioExecutor.invokeAll(prefetchTasks, 2500, TimeUnit.MILLISECONDS);
+                    } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                }
+            }        }
+
+        // ┌─────────────────────────────────────────────────────────────┐
+        // │ 🛑 [TELEMETRY START] - FIN I/O                              │
+        // └─────────────────────────────────────────────────────────────┘
+        long endIO = System.nanoTime();
+        // ───────────────────────────────────────────────────────────────
 
         if (marketData.isEmpty()) {
-            BotLogger.warn("⚠️ ALERTA: No se recibieron datos de precios.");
+            BotLogger.warn("⚠️ ALERTA: Blackout total.");
             return;
         }
 
-        List<Callable<Void>> tasks = new ArrayList<>();
+        // ┌─────────────────────────────────────────────────────────────┐
+        // │ 🛑 [TELEMETRY START] - INICIO CPU                           │
+        // └─────────────────────────────────────────────────────────────┘
+        long startCPU = System.nanoTime();
+        // ───────────────────────────────────────────────────────────────
+
+        // ---------------------------------------------------------
+        // 🚀 FASE 2: ANÁLISIS PROFUNDO (Ahora sí es pura CPU)
+        // ---------------------------------------------------------
+        // Como ya hicimos prefetch, las llamadas a 'fetchOrderBookCached' dentro de
+        // 'analyzeAssetInMemory' devolverán el dato de RAM instantáneamente.
+
+        List<Callable<Void>> analysisTasks = new ArrayList<>();
         for (String asset : huntingGrounds) {
-            tasks.add(() -> {
-                // ➡️ Pasamos el timestamp hacia abajo
+            analysisTasks.add(() -> {
                 analyzeAssetInMemory(asset, marketData, cachedBalances, snapshotTimestamp);
                 return null;
             });
         }
-        try { virtualExecutor.invokeAll(tasks); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-    }
 
+        try {
+            virtualExecutor.invokeAll(analysisTasks);
+        } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+
+        // ┌─────────────────────────────────────────────────────────────┐
+        // │ 🛑 [TELEMETRY START] - REPORTE FINAL                        │
+        // └─────────────────────────────────────────────────────────────┘
+        long endCPU = System.nanoTime();
+        long endCycle = System.nanoTime();
+
+        double ioMs = (endIO - startIO) / 1_000_000.0;
+        double cpuMs = (endCPU - startCPU) / 1_000_000.0;
+        double totalMs = (endCycle - startCycle) / 1_000_000.0;
+
+        String perfLog = String.format(java.util.Locale.US,
+                "⚡ PERF: Ciclo: %6.2f ms | 🌐 I/O (Inc. Prefetch): %6.2f ms | 🧠 CPU: %6.2f ms | 📉 Objetivos: %d",
+                totalMs, ioMs, cpuMs, huntingGrounds.size());
+
+        BotLogger.info(perfLog);
+        // └─────────────────────────────────────────────────────────────┘
+    }
+    // 🌡️ DETECTOR DE CALOR: Filtro rápido para decidir si hacemos Prefetch
+    private boolean isHotCandidate(String asset, Map<String, Map<String, Double>> marketData) {
+        String pair = asset + "USDT";
+        double minPrice = Double.MAX_VALUE;
+        double maxPrice = -1.0;
+        int count = 0;
+
+        for (String ex : exchanges) {
+            Map<String, Double> prices = marketData.get(ex);
+            if (prices != null && prices.containsKey(pair)) {
+                double p = prices.get(pair);
+                if (p < minPrice) minPrice = p;
+                if (p > maxPrice) maxPrice = p;
+                count++;
+            }
+        }
+
+        if (count < 2) return false; // Necesitamos al menos 2 para comparar
+
+        // Cálculo rápido de Spread Bruto
+        double spread = (maxPrice - minPrice) / minPrice;
+
+        // UMBRAL DE PREFETCH:
+        // Si el spread bruto es mayor al 0.2% (0.002), asumimos que vale la pena ver el libro.
+        // Es más bajo que el umbral de tradeo para ser "optimistas".
+        return spread > 0.002;
+    }
     private void analyzeAssetInMemory(String asset, Map<String, Map<String, Double>> marketData,
                                       Map<String, Map<String, Double>> balanceSnapshot, long snapshotTimestamp) {
 
@@ -226,6 +367,7 @@ public class DeepMarketScanner implements MarketListener {
                 analyzeTriangularLoop(exchange, asset, prices);
             }
         });
+        MetricsService.get().recordOp();
     }
     // 🌍 LÓGICA DE DETECCIÓN ESPACIAL (NUEVO MOTOR)
     private void analyzeSpatialSpread(String asset, Map<String, Map<String, Double>> marketData,
@@ -452,66 +594,45 @@ public class DeepMarketScanner implements MarketListener {
     }
     // 📐 LÓGICA DE DETECCIÓN TRIANGULAR (CON TELEMETRÍA)
     private void analyzeTriangularLoop(String exchange, String asset, Map<String, Double> prices) {
-        String pair1 = asset + "USDT";
+        String pair1 = asset + "USDT"; // ✅ SE CREA AQUÍ
         Double price1 = prices.get(pair1);
 
-        // Si no hay precio base en USDT, no podemos empezar
         if (price1 == null) return;
 
         for (String bridge : BRIDGE_ASSETS) {
             if (bridge.equals(asset)) continue;
 
-            String pair2 = asset + bridge; // Ej: WIFBTC
+            String pair2 = asset + bridge; // ✅ SE CREA AQUÍ
             Double price2 = prices.get(pair2);
 
-            // Si no existe directo (WIFBTC), probamos inverso (BTCWIF) si el exchange lo usa
-            // (Nota: Por simplicidad, asumimos convención estándar Base+Quote primero)
-
-            String pair3 = bridge + "USDT"; // Ej: BTCUSDT
+            String pair3 = bridge + "USDT"; // ✅ SE CREA AQUÍ
             Double price3 = prices.get(pair3);
 
             if (price2 != null && price3 != null) {
-                // Cálculo Teórico
                 double crossRate = (1.0 / price1) * price2 * price3;
 
-                /* 🔇 COMENTAMOS LA SONDA PARA RECUPERAR VELOCIDAD
-                double theoreticalSpread = (crossRate - 1.0) * 100.0; // En porcentaje
-
-                // 🔍 SONDA DE VIDA: Si el spread bruto es positivo (aunque sea 0.01%), avísanos
-                // Esto es solo para depurar, lo quitaremos después.
-                if (theoreticalSpread > 0.05) { // Si hay al menos 0.05% de luz
-                    BotLogger.info(String.format("📐 RASTRO: %s | %s-%s | Gap Bruto: %.4f%% (Fees est: 0.30%%)",
-                            exchange, asset, bridge, theoreticalSpread));
-                }
-                */
-                // Filtro "Portero" Original
                 if (crossRate > (1.0 + BotConfig.MIN_SCAN_SPREAD)) {
-                    validateTriangularOpportunity(exchange, asset, bridge, price1);
+                    // ✅ OPTIMIZACIÓN: Pasamos los Strings p1, p2, p3 hacia abajo
+                    validateTriangularOpportunity(exchange, asset, bridge, price1, pair1, pair2, pair3);
                 }
-            } else {
-                // 🕵️‍♂️ DIAGNÓSTICO DE PARES FANTASMA
-                // Solo logueamos esto una vez cada tanto para no saturar, o activalo si no ves NADA.
-                // BotLogger.warn("👻 Par faltante en " + exchange + ": " + pair2 + " o " + pair3);
             }
         }
     }
-
-    // [ACTUALIZADO] 🧪 VALIDACIÓN CIENTÍFICA (Itera por Capitales)
-    private void validateTriangularOpportunity(String exchange, String asset, String bridge, double p1Ticker) {
+    // [ACTUALIZADO] 🧪 VALIDACIÓN CIENTÍFICA (Ahora sí usa la Caché)
+    private void validateTriangularOpportunity(String exchange, String asset, String bridge, double p1Ticker,
+                                               String p1, String p2, String p3) {
         try {
-            String pair1 = asset + "USDT";
-            String pair2 = asset + bridge;
-            String pair3 = bridge + "USDT";
+            // ✅ CORRECCIÓN: Usamos fetchOrderBookCached en lugar de connector.fetchOrderBook
+            // Esto recuperará instantáneamente lo que el Prefetch descargó en la fase anterior.
+            ExchangeConnector.OrderBook book1 = fetchOrderBookCached(exchange, p1, 20);
+            ExchangeConnector.OrderBook book2 = fetchOrderBookCached(exchange, p2, 20);
+            ExchangeConnector.OrderBook book3 = fetchOrderBookCached(exchange, p3, 20);
 
-            // Descargamos Order Books UNA SOLA VEZ (Profundidad 10 para aguantar $3000)
-            ExchangeConnector.OrderBook book1 = connector.fetchOrderBook(exchange, pair1, 20);
-            ExchangeConnector.OrderBook book2 = connector.fetchOrderBook(exchange, pair2, 20);
-            ExchangeConnector.OrderBook book3 = connector.fetchOrderBook(exchange, pair3, 20);
+            // Si alguno falló en el prefetch (null), abortamos rápido para no perder tiempo
+            if (book1 == null || book2 == null || book3 == null) return;
 
-            // 🔥 BUCLE DE STRESS TEST 🔥
-            // Probamos el MISMO momento de mercado con DIFERENTES pesos de capital
             for (Double testCap : testCapitals) {
-                simulateScenario(exchange, asset, bridge, testCap, book1, book2, book3, p1Ticker);
+                simulateScenario(exchange, asset, bridge, testCap, book1, book2, book3, p1Ticker, p1, p2, p3);
             }
 
         } catch (Exception e) { }
@@ -519,8 +640,8 @@ public class DeepMarketScanner implements MarketListener {
 
     // [NUEVO] 🧠 MOTOR DE SIMULACIÓN
     private void simulateScenario(String exchange, String asset, String bridge, double cap,
-                                  ExchangeConnector.OrderBook b1, ExchangeConnector.OrderBook b2, ExchangeConnector.OrderBook b3, double p1Ticker) {
-
+                                  ExchangeConnector.OrderBook b1, ExchangeConnector.OrderBook b2, ExchangeConnector.OrderBook b3, double p1Ticker,
+                                  String p1, String p2, String p3) {
         // 1. 🛡️ FILTRO DE LATENCIA (RTT)
         long rtt = connector.getRTT(exchange);
 
@@ -572,7 +693,7 @@ public class DeepMarketScanner implements MarketListener {
         }
 
         // 5. ✅ ZONA DE ÉXITO Y EJECUCIÓN
-        if (netProfit > BotConfig.MIN_PROFIT_THRESHOLD) {
+        if (netProfit > BotConfig.MIN_PROFIT_USDT) {
 
             // A. Registrar la mejor oportunidad para Telegram
             updateBestOpportunity(exchange, asset, bridge, netProfit);
@@ -581,15 +702,25 @@ public class DeepMarketScanner implements MarketListener {
             printTriangularRow(exchange, asset, bridge, cap, grossGap, totalFees, netProfit);
 
             // C. EJECUCIÓN DE FUEGO REAL (Solo si es el capital maestro y no es simulacro)
-            // Se usa 'Double.compare' para evitar errores de precisión flotante
-            if (!BotConfig.DRY_RUN && Double.compare(cap, BotConfig.SEED_CAPITAL) == 0 && tradesCount.get() == 0) {
-                // ⛔ COMENTADO POR SEGURIDAD (tradeExecutor es null en arquitectura Espacial)
-                // BotLogger.warn("🚀 OPORTUNIDAD REAL DETECTADA. EJECUTANDO...");
-                // tradeExecutor.executeTriangular(exchange, asset, bridge, cap);
+            // 🚦 SEMÁFORO
+            if (coordinator != null && coordinator.tryAcquireLock(exchange)) {
+                try {
+                    // 🔥 DISPARO: Pasamos 'exchange' y los pares 'p1, p2, p3' directos
+                    triangularExecutor.executeSequence(exchange, asset, bridge, p1, p2, p3, cap, p1Ticker);
 
-                BotLogger.warn("⚠️ Oportunidad Triangular detectada pero ignorada (Modo Espacial Activo).");
+                    this.forceBalanceUpdate = true;
+                    tradesCount.incrementAndGet(); // Bloqueo temporal
+                    // TODO: Comentar Log en producción
+                    BotLogger.warn("🚀 EJECUTANDO TRIANGULAR en " + exchange);
+                } catch (Exception e) {
+                    BotLogger.error("❌ FAIL TRIANGULAR: " + e.getMessage());
+                } finally {
+                    coordinator.releaseLock(exchange);
+                }
+            } else {
+                // TODO: Comentar en producción para reducir ruido
+                BotLogger.warn("🔒 LOCK BUSY: " + exchange);
             }
-
             // D. Actualización de Métricas Globales (Solo sumamos UNA vez por ciclo, usando el capital base)
             // Esto evita que sumemos el profit de $10, $100 y $1000 al mismo tiempo en el total
             if (Double.compare(cap, testCapitals.get(0)) == 0) {
@@ -599,34 +730,43 @@ public class DeepMarketScanner implements MarketListener {
         }
     }
 
-   private void printTriangularRow(String exchange, String asset, String bridge, double cap, double gap, double fees, double net) {
-        // Construimos el mensaje en el stack del hilo local
+    // ==================================================================================
+    // 🚀 VISUALIZACIÓN OPTIMIZADA (BARE METAL LOGGING)
+    // Estrategia: String.format con Locale.US.
+    // Ventaja: Stateless, Thread-Safe y maneja padding + decimales en una sola operación atomic.
+    // ==================================================================================
+
+    private void printTriangularRow(String exchange, String asset, String bridge, double cap, double gap, double fees, double net) {
         String time = LocalTime.now().format(timeFmt);
         String route = "⚡ " + asset + "-" + bridge;
-        String sNet = (net > 0 ? "💎 $" : "🔻 $") + dfUsdt.get().format(net);
 
-        String logLine = String.format("║ %s ║ %-3s ║ %-13s ║ %5.0f ║ %6s ║ %6s ║ %s ║",
+        // Símbolo visual rápido para el operador
+        String symbol = net > 0 ? "💎 $" : "🔻 $";
+
+        // FORMATO:
+        // %-3s  : Exchange (3 letras, aling izq)
+        // %5.0f : Capital (Sin decimales, ancho 5)
+        // %6.2f : Gap y Fees (2 decimales, ancho 6 para alinear columnas)
+        // %.2f  : Neto (2 decimales)
+        String logLine = String.format(java.util.Locale.US,
+                "║ %s ║ %-3s ║ %-13s ║ %5.0f ║ %6.2f ║ %6.2f ║ %s%6.2f ║",
                 time, exchange.substring(0,3).toUpperCase(), route, cap,
-                dfUsdt.get().format(gap), dfUsdt.get().format(fees), sNet);
+                gap, fees, symbol, net);
 
-        // 🔥 FUEGO ASÍNCRONO: Delegamos al Logger sin bloquear el Scanner
         BotLogger.info(logLine);
     }
 
-    // Método auxiliar Spatial Print (para compatibilidad)
-    // [VISUALIZACIÓN] 🎨 TABLA SPATIAL (Legacy Support Optimizado)
     private void printRow(String asset, String buyEx, String sellEx, double gap, double tradeFee, double netFee, double net) {
         String time = LocalTime.now().format(timeFmt);
         String route = buyEx.substring(0,3).toUpperCase() + "->" + sellEx.substring(0,3).toUpperCase();
 
-        // ✅ VERIFICACIÓN DE USO:
-        String sGap = dfUsdt.get().format(gap);    // Dinero bruto
-        String sTFee = dfPct.get().format(tradeFee); // Tasa de comisión (%)
-        String sNFee = dfPct.get().format(netFee);   // Tasa neta (%)
-        String sNet = (net > 0 ? "💎 " : "🔻 ") + dfUsdt.get().format(net); // Dinero neto
+        String symbol = net > 0 ? "💎 " : "🔻 ";
 
-        String logLine = String.format("║ %s ║ %-6s ║ %-13s ║ %5s ║ %6s ║ %6s ║ %6s ║ %s ║",
-                time, asset, route, "224", sGap, sTFee, sNFee, sNet);
+        // FORMATO SPATIAL:
+        // Usamos 4 decimales (%6.4f) para las tasas (%) para ver el detalle fino de los fees
+        String logLine = String.format(java.util.Locale.US,
+                "║ %s ║ %-6s ║ %-13s ║ %5s ║ %6.2f ║ %6.4f ║ %6.4f ║ %s%6.2f ║",
+                time, asset, route, "224", gap, tradeFee, netFee, symbol, net);
 
         BotLogger.info(logLine);
     }
@@ -637,11 +777,7 @@ public class DeepMarketScanner implements MarketListener {
         System.out.println("╠══════════╬════════╬═══════════════╬═══════╬════════╬════════╬════════╬════════════╣");
     }
 
-    /**
-     * 📸 SNAPSHOT DE CONFIGURACIÓN (CAJA NEGRA)
-     * Documenta el estado inicial de todas los parámetros
-     * para análisis forense posterior.
-     */
+
     /**
      * 📸 SNAPSHOT DE CONFIGURACIÓN (CYBERPUNK EDITION)
      */
@@ -702,7 +838,7 @@ public class DeepMarketScanner implements MarketListener {
         BotLogger.info(C + "╠════════════════════════════════════════════════════════════╣" + R);
         BotLogger.info(String.format(C + "║ 📡  MAX LATENCIA:     " + W + "%-35s " + C + "║" + R, BotConfig.MAX_LATENCY_MS + " ms"));
         BotLogger.info(String.format(C + "║ 📉  MAX SLIPPAGE:     " + W + "%-35s " + C + "║" + R, pct.format(BotConfig.MAX_SLIPPAGE)));
-        BotLogger.info(String.format(C + "║ ⏱️  SCAN INTERVAL:    " + W + "%-35s " + C + "║" + R, BotConfig.SCAN_DELAY + " ms"));
+        BotLogger.info(String.format(C + "║ ⏱️  SCAN INTERVAL:    " + W + "%-35s " + C + "║" + R, BotConfig.MAX_LATENCY_MS + " ms"));
         BotLogger.info(String.format(C + "║ 🔒  LOCK TIMEOUT:     " + W + "%-35s " + C + "║" + R, BotConfig.EXECUTION_LOCK_TIMEOUT_MS + " ms"));
         BotLogger.info(String.format(C + "║ 😷  CUARENTENA CB:    " + Y + "%-35s " + C + "║" + R, (BotConfig.CB_QUARANTINE_DURATION_MS / 1000) + " seg"));
 
@@ -730,9 +866,11 @@ public class DeepMarketScanner implements MarketListener {
     }
     private void sendTelegramReport() {
         try {
+            logCacheStats();
             StringBuilder sb = new StringBuilder();
             sb.append("🛰️ *DASHBOARD DE TELEMETRÍA*\n");
             sb.append("━━━━━━━━━━━━━━━━━━\n");
+
 
             // 📶 Salud de la Red (RTT)
             sb.append("📶 *Latencia (RTT):*\n");
@@ -757,6 +895,13 @@ public class DeepMarketScanner implements MarketListener {
         } catch (Exception e) {
             BotLogger.error("Error Dashboard: " + e.getMessage());
         }
+    }
+    public void logCacheStats() {
+        var stats = orderBookCache.stats();
+        BotLogger.info(String.format("🧠 CACHE STATS: HitRate=%.2f%% | Evictions=%d | LoadCount=%d",
+                stats.hitRate() * 100,
+                stats.evictionCount(),
+                stats.loadCount()));
     }
     private void updateBestOpportunity(String ex, String asset, String bridge, double profit) {
         maxProfitSeenRef.updateAndGet(currentMax -> {
@@ -798,51 +943,64 @@ public class DeepMarketScanner implements MarketListener {
      * 🔄 GESTIÓN DE SALDOS
      * REFRESH PARALELO CON RATE LIMITING INTELIGENTE
      */
-// ✅
+
     private void refreshBalancesResult() {
         long now = System.currentTimeMillis();
+        // 1. TTL Check: Si la caché está fresca, ahorramos CPU y Red
+        if (!forceBalanceUpdate && (now - lastBalanceUpdate) < BALANCE_TTL_MS) return;
 
-        // Solo entramos si toca actualizar
-        if (!forceBalanceUpdate && (now - lastBalanceUpdate) < BALANCE_TTL_MS) {
-            return;
-        }
+        // ⚡ JAVA 25: PATRÓN "SCATTER-GATHER" CON TIMEOUT ESTRICTO
+        // Usamos el Executor de Hilos Virtuales (Project Loom)
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
 
-        BotLogger.info("🌐 Refrescando saldos (Modo Paralelo Real)...");
+            // 2. PREPARAR TAREAS (Callable)
+            // Convertimos cada llamada a la API en una tarea que retorna el mapa de saldos
+            List<Callable<Map<String, Double>>> tasks = exchanges.stream()
+                    .map(ex -> (Callable<Map<String, Double>>) () -> {
+                        return connector.fetchBalances(ex); // Esto bloquea el hilo virtual, no el OS
+                    })
+                    .toList();
 
-        List<CompletableFuture<Void>> futures = exchanges.stream()
-                .map(ex -> CompletableFuture.runAsync(() -> {
-                            try {
-                                // 1. Sin synchronized. El conector ya es thread-safe.
-                                // 2. Sin sleep artificial. Si queremos velocidad, pedimos velocidad.
-                                //    El ExchangeConnector ya tiene lógica de reintentos si falla.
+            try {
+                // 3. LA MAGIA: INVOKE ALL CON DEADLINE
+                // "Lanza todo, espera máximo 1500ms. Si alguien no termina, MÁTALO."
+                // Esto reemplaza al antiguo joinUntil().
+                List<Future<Map<String, Double>>> results = executor.invokeAll(tasks, 1500, TimeUnit.MILLISECONDS);
 
-                                Map<String, Double> balances = connector.fetchBalances(ex);
+                // 4. PROCESAR RESULTADOS (Solo los que llegaron a tiempo)
+// 4. PROCESAR RESULTADOS (Dentro del try de invokeAll)
+                for (int i = 0; i < results.size(); i++) {
+                    Future<Map<String, Double>> future = results.get(i);
+                    String exchangeName = exchanges.get(i);
 
-                                if (balances != null && !balances.isEmpty()) {
-                                    cachedBalances.put(ex, balances);
-                                    // Opcional: BotLogger.info("💰 " + ex + " actualizado.");
-                                }
-                            } catch (Exception e) {
-                                // Silencioso: Si falla, el Scanner usará el saldo viejo de la caché.
-                                // No detenemos el show.
+                    try {
+                        // El compilador exige este try-catch aunque sepamos que está "done"
+                        if (future.state() == Future.State.SUCCESS) {
+                            Map<String, Double> balances = future.get(); // Ahora sí seguro
+                            if (balances != null && !balances.isEmpty()) {
+                                cachedBalances.put(exchangeName, balances);
                             }
-                        }, balanceExecutor)
-                        .orTimeout(3, TimeUnit.SECONDS) // ⏱️ TIMEOUT DURO: Si tarda > 3s, abortar ese hilo.
-                        .exceptionally(e -> {
-                            // Si ocurre timeout, no imprimimos stacktrace gigante, solo aviso
-                            return null;
-                        }))
-                .toList();
+                        } else if (future.state() == Future.State.CANCELLED) {
+                            // Timeout silencioso
+                        } else if (future.state() == Future.State.FAILED) {
+                            // Logueamos la excepción interna sin detener el sistema
+                            // BotLogger.warn("Fallo balance " + exchangeName + ": " + future.exceptionNow().getMessage());
+                        }
+                    } catch (ExecutionException e) {
+                        // Esto atrapa si la tarea lanzó una excepción no controlada
+                        BotLogger.error("Error ejecución en " + exchangeName + ": " + e.getCause().getMessage());
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt(); // Buena práctica
+                    }
+                }
+            } catch (InterruptedException e) {
+                // Manejo si el hilo principal es interrumpido
+                Thread.currentThread().interrupt();
+            }
 
-        // Esperamos a todos, pero con un límite máximo global de seguridad
-        try {
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-                    .join(); // Espera a que terminen los 4 hilos (o den timeout)
-        } catch (Exception e) {
-            BotLogger.warn("⚠️ Actualización de saldos incompleta (Continuando scan...)");
-        }
+        } // El try-with-resources cierra el executor y limpia hilos zombies automáticamente
 
-        lastBalanceUpdate = now;
+        lastBalanceUpdate = System.currentTimeMillis();
         forceBalanceUpdate = false;
     }
     public void injectCoordinator(ExecutionCoordinator coordinator) {
@@ -859,27 +1017,65 @@ public class DeepMarketScanner implements MarketListener {
      * @param depth Profundidad del libro (20 niveles recomendado)
      * @return OrderBook fresco o cacheado
      */
+// ✅ Versión Standard (Usada por el Análisis): Si descarga aquí, ES LAG -> Grita.
     private ExchangeConnector.OrderBook fetchOrderBookCached(String exchange, String pair, int depth) {
-        String key = exchange + "_" + pair;
-        CachedOrderBook cached = orderBookCache.get(key);
-
-        long now = System.currentTimeMillis();
-
-        // ✅ Si el caché es fresco (< 2 segundos), reutilizamos
-        if (cached != null && (now - cached.timestamp) < ORDERBOOK_TTL_MS) {
-            return cached.book;
-        }
-
-        // ⚡ Descarga nueva (blocking, pero solo si es necesario)
-        ExchangeConnector.OrderBook fresh = connector.fetchOrderBook(exchange, pair, depth);
-
-        if (fresh != null) {
-            orderBookCache.put(key, new CachedOrderBook(fresh, now));
-        }
-
-        return fresh;
+        return fetchOrderBookCachedInternal(exchange, pair, depth, false); // false = NO SILENT (Gritar)
     }
-    // 🧠 MOTOR DE SIMULACIÓN ESPACIAL OPTIMIZADO (v6.1 - Math Fix)
+
+    // ✅ Versión Interna (Lógica Real)
+// ✅ Versión Interna OPTIMIZADA (Request Coalescing)
+    private ExchangeConnector.OrderBook fetchOrderBookCachedInternal(String exchange, String pair, int depth, boolean silent) {
+        String key = exchange + "_" + pair;
+
+        // 1. 🚀 FAST PATH: Consultamos Caffeine
+        // getIfPresent devuelve null si no existe O si ya expiró (adiós lógica manual de timestamps)
+        CachedOrderBook cached = orderBookCache.getIfPresent(key);
+
+        if (cached != null) {
+            // Caffeine ya validó el TTL internamente, así que es seguro retornar
+            return cached.book();
+        }
+
+        // 2. 🐢 SLOW PATH: "Request Coalescing" (Tu lógica de vuelo original se mantiene intacta)
+        // Esto es crucial: Caffeine tiene un método .get(key, loader) que hace esto mismo (bloqueo atómico),
+        // PERO tu implementación con CompletableFuture + VirtualExecutor es superior para este caso de uso
+        // porque permite timeouts asíncronos y control de excepciones específico sin bloquear hilos de plataforma.
+        CompletableFuture<ExchangeConnector.OrderBook> future = inflightBookRequests.computeIfAbsent(key, k -> {
+
+            if (!silent) {
+                BotLogger.warn("🐢 LAG REAL (Single-Flight): Descargando -> " + exchange + " | " + pair);
+            }
+
+            return CompletableFuture.supplyAsync(() -> {
+                try {
+                    return connector.fetchOrderBook(exchange, pair, depth);
+                } catch (Exception e) {
+                    BotLogger.error("❌ Error fetching book " + key + ": " + e.getMessage());
+                    return null;
+                }
+            }, virtualExecutor);
+        });
+
+        try {
+            // 3. ⏳ ESPERA COLABORATIVA
+            ExchangeConnector.OrderBook freshBook = future.join();
+
+            // 4. ACTUALIZACIÓN EN CAFFEINE
+            if (freshBook != null) {
+                // Simplemente ponemos en la caché. Caffeine iniciará el conteo de 5s desde AHORA.
+                orderBookCache.put(key, new CachedOrderBook(freshBook, System.currentTimeMillis()));
+            }
+
+            // 🔥 IMPORTANTE: Limpiamos el vuelo
+            inflightBookRequests.remove(key, future);
+
+            return freshBook;
+
+        } catch (Exception e) {
+            inflightBookRequests.remove(key, future);
+            return null;
+        }
+    }
     private void simulateSpatialScenarioOptimized(String asset, String buyEx, String sellEx, double cap,
                                                   ExchangeConnector.OrderBook bookBuy, ExchangeConnector.OrderBook bookSell,
                                                   double tickerPrice,
@@ -952,12 +1148,34 @@ public class DeepMarketScanner implements MarketListener {
         // 4. ⚖️ VEREDICTO FINAL
         // =====================================================================
 
+// =====================================================================
+        // 4. ⚖️ VEREDICTO FINAL
+        // =====================================================================
+
         if (netProfit > requiredProfit) {
 
-            // Log Visual Consola
-            // Calculamos total fees para mostrar en la tabla
-            double totalFees = costBuyFees + costSellFees;
+            // ┌─────────────────────────────────────────────────────────────────────────────┐
+            // │ 🧪 [DEBUG ZONE] TELEMETRÍA MATEMÁTICA DETALLADA (SOLO PARA CALIBRACIÓN)     │
+            // │ ⚠️ ADVERTENCIA: La creación de Strings es costosa.                          │
+            // │ 📝 TODO: Comentar o Eliminar este bloque entero antes de pasar a Producción.  │
+            // └─────────────────────────────────────────────────────────────────────────────┘
+            String tradeTerms = "N/A"; // Valor por defecto para no romper el Logger
+            //eliminar en producción comentando el if {}
+            // Solo gastamos CPU formateando el string si estamos en modo Simulación (DryRun)
+            if (BotConfig.DRY_RUN) {
+                tradeTerms = String.format(java.util.Locale.US,
+                        "In:%.5f|Out:%.5f|Fees:%.5f|Vol:%.2f",
+                        realBuyPrice,   // Precio ponderado real de compra (con slippage)
+                        realSellPrice,  // Precio ponderado real de venta (con slippage)
+                        (costBuyFees + costSellFees), // Total pagado en comisiones
+                        realQtyAsset    // Cantidad real del activo movida
+                );
+            }
 
+            // └─────────────────────────────────────────────────────────────────────────────┘
+
+            // Log Visual Consola (Esto se mantiene, es ligero)
+            double totalFees = costBuyFees + costSellFees;
             if (isEmergencyMove) {
                 BotLogger.warn("🚑 REBALANCEO (" + buyEx + "->" + sellEx + ") | Profit: " + dfUsdt.get().format(netProfit));
             }
@@ -965,20 +1183,19 @@ public class DeepMarketScanner implements MarketListener {
             updateBestOpportunity(buyEx + "->" + sellEx, asset, "SPATIAL", netProfit);
             printRow(asset, buyEx, sellEx, grossSpreadPct, totalFees, 0.0, netProfit);
 
-            // 🔥 EJECUCIÓN
+            // 🔥 EJECUCIÓN O SIMULACIÓN
             if (!BotConfig.DRY_RUN && tradesCount.get() == 0) {
+                // ... (Lógica de Ejecución Real - SIN CAMBIOS) ...
                 if (coordinator != null && coordinator.tryAcquireDualLock(buyEx, sellEx)) {
                     try {
                         BotLogger.warn("🚀 EJECUTANDO SECUENCIA ESPACIAL [Cap: $" + effectiveCap + "]");
-
-                        crossExecutor.executeCrossTrade(buyEx, sellEx, asset + "USDT"
-                                , realQtyAsset, realBuyPrice, realSellPrice);
-
+                        crossExecutor.executeCrossTrade(buyEx, sellEx, asset + "USDT", realQtyAsset, realBuyPrice, realSellPrice);
                         this.forceBalanceUpdate = true;
                         tradesCount.incrementAndGet();
 
+                        // En prod, tradeTerms será "N/A" (ligero), o puedes pasar null si el logger lo aguanta.
                         BotLogger.logOpportunity("SPATIAL", asset, buyEx + "->" + sellEx,
-                                grossSpreadPct, netProfit, "EXECUTED", "PROFITABLE");
+                                grossSpreadPct, netProfit, "EXECUTED", tradeTerms);
 
                     } catch (Exception e) {
                         BotLogger.error("❌ ERROR CRÍTICO: " + e.getMessage());
@@ -990,12 +1207,13 @@ public class DeepMarketScanner implements MarketListener {
                     BotLogger.warn("🔒 BLOQUEO ACTIVO EN " + buyEx + "/" + sellEx);
                 }
             } else {
-                // Registro DRY-RUN
-                // 🧹 Filtro de limpieza: Solo loguear si es matemáticamente coherente
+                // 🧪 REGISTRO DE SIMULACIÓN (AQUÍ ES DONDE QUEREMOS VER LOS DATOS)
                 if (netProfit > -1.0) {
                     BotLogger.logOpportunity("SPATIAL", asset, buyEx + "->" + sellEx,
                             grossSpreadPct, netProfit,
-                            BotConfig.DRY_RUN ? "SIMULATED" : "SKIPPED", "PROFITABLE");
+                            BotConfig.DRY_RUN ? "SIMULATED" : "SKIPPED",
+                            tradeTerms // <--- AQUÍ PASAMOS LA EVIDENCIA FORENSE
+                    );
                 }
             }
 
@@ -1013,7 +1231,6 @@ public class DeepMarketScanner implements MarketListener {
 
         // 2. Detener Hilos de Fuerza
         virtualExecutor.shutdownNow();
-        balanceExecutor.shutdownNow();
 
         // 3. Imprimir Reporte Final
         BotLogger.info("📊 REPORTE FINAL DE SESIÓN:");

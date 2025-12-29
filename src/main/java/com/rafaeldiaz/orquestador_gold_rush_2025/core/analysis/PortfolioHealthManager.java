@@ -5,147 +5,111 @@ import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.BotConfig;
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.DoubleAdder;
 
 /**
- * 🧠 CFO AUTÓNOMO (GERENTE DE SALUD FINANCIERA)
- * Controla el Auto-Descubrimiento de activos y el Rebalanceo de Inventario.
+ * 🧠 CFO QUANTUM (GERENTE FINANCIERO ASÍNCRONO)
+ * Desacopla la lectura de datos (Red) de la toma de decisiones (CPU).
+ * Mantiene un "Estado del Mundo" en RAM actualizado en segundo plano.
  */
 public class PortfolioHealthManager {
 
     private final ExchangeConnector connector;
     private final List<String> spatialAccounts;
-    private double totalEquityUsdt = 0.0;
-    // Caché de Directivas (Para no saturar la API)
+    private volatile double totalEquityUsdt = 0.0;
+
+    // 🧠 MEMORIA DE CORTO PLAZO (RAM - Acceso Nanosegundos)
     private final Map<String, HealthDirective> directiveCache = new ConcurrentHashMap<>();
-    private final Map<String, Long> lastUpdateMap = new ConcurrentHashMap<>();
+
+    // ⚙️ MOTOR DE FONDO
+    private final ScheduledExecutorService heartbeatScheduler = Executors.newSingleThreadScheduledExecutor();
+    private final ExecutorService scatterExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
     public PortfolioHealthManager(ExchangeConnector connector) {
         this.connector = connector;
         this.spatialAccounts = BotConfig.SPATIAL_ACCOUNTS;
-        BotLogger.info("🧠 CFO INICIADO: Gestionando cuentas " + spatialAccounts);
+        BotLogger.info("🧠 CFO QUANTUM INICIADO: Gestionando cuentas " + spatialAccounts);
+
+        // 🚀 AUTO-ARRANQUE: Inicia el monitoreo en segundo plano
+        startHealthMonitor();
     }
 
     /**
-     * 🕵️ AUTO-DESCUBRIMIENTO: Cruza los inventarios para ver qué operar.
+     * 💓 LATIDO DEL CFO: Actualiza la salud de los activos proactivamente.
+     * El Scanner nunca espera por la red, solo lee la última verdad conocida.
      */
-    public List<String> discoverTradableAssets() {
-        if (!BotConfig.AUTO_DISCOVERY) return BotConfig.FIXED_ASSETS;
+    private void startHealthMonitor() {
+        // Ejecutar cada 5 segundos (independiente del Scanner)
+        heartbeatScheduler.scheduleAtFixedRate(() -> {
+            try {
+                // 1. Identificar qué activos nos importan (Intersección con lo que el Scanner busca)
+                // Por defecto actualizamos los activos fijos o los descubiertos.
+                // Para no complicar, actualizamos los "Hot Assets" definidos en Config o un set dinámico.
+                List<String> assetsToMonitor = BotConfig.AUTO_DISCOVERY ?
+                        new ArrayList<>(directiveCache.keySet()) : BotConfig.FIXED_ASSETS;
 
-        BotLogger.info("🕵️ CFO: Realizando Auditoría de Inventario...");
-        try {
-            String exA = spatialAccounts.get(0);
-            String exB = spatialAccounts.get(1);
+                if (assetsToMonitor.isEmpty()) return;
 
-            Map<String, Double> balA = connector.fetchBalances(exA);
-            Map<String, Double> balB = connector.fetchBalances(exB);
+                // 2. Actualización Masiva Paralela
+                updateDirectivesBatch(assetsToMonitor);
 
-            Set<String> assetsA = filterDust(exA, balA);
-            Set<String> assetsB = filterDust(exB, balB);
-
-            // La Intersección Mágica (Solo lo que existe en ambos lados)
-            List<String> commonAssets = new ArrayList<>();
-            for (String asset : assetsA) {
-                if (assetsB.contains(asset) && !asset.equals("USDT")) {
-                    commonAssets.add(asset);
-                }
+            } catch (Exception e) {
+                BotLogger.error("💔 CFO Heartbeat Falló: " + e.getMessage());
             }
-
-            if(commonAssets.isEmpty()) {
-                BotLogger.warn("⚠️ CFO: No hay activos comunes entre " + exA + " y " + exB + ". (Solo USDT?)");
-            } else {
-                BotLogger.info("✅ CFO: Portafolio Activo Detectado: " + commonAssets);
-            }
-            return commonAssets;
-        } catch (Exception e) {
-            BotLogger.error("❌ CFO Error en Discovery: " + e.getMessage());
-            return BotConfig.FIXED_ASSETS; // Fallback seguro
-        }
+        }, 0, BotConfig.HEALTH_CHECK_INTERVAL, TimeUnit.SECONDS);
     }
 
     /**
-     * Filtra monedas "basura" (< $5 USD) usando Batch Price Fetch.
-     * OPTIMIZADO: 1 llamada API en lugar de N llamadas.
-     */
-    private Set<String> filterDust(String exchange, Map<String, Double> balances) {
-        Set<String> real = new HashSet<>();
-
-        // 🚀 OPTIMIZACIÓN: Descargamos todo el mercado en 1 sola llamada
-        Map<String, Double> allPrices = connector.fetchAllPrices(exchange);
-
-        for (Map.Entry<String, Double> e : balances.entrySet()) {
-            String asset = e.getKey();
-            Double qty = e.getValue();
-
-            // Caso base: USDT
-            if (asset.equals("USDT")) {
-                if (qty > BotConfig.MIN_ASSET_VALUE_USDT) real.add(asset);
-                continue;
-            }
-
-            // Búsqueda en memoria (HashMap O(1))
-            // Probamos formatos comunes (SOLUSDT o SOL-USDT)
-            Double price = allPrices.get(asset + "USDT");
-            if (price == null) {
-                price = allPrices.get(asset + "-USDT"); // Soporte Kucoin/Legacy
-            }
-
-            // Si no encontramos precio (moneda deslistada o rara), asumimos 0
-            double finalPrice = (price != null) ? price : 0.0;
-
-            if ((qty * finalPrice) > BotConfig.MIN_ASSET_VALUE_USDT) {
-                real.add(asset);
-            }
-        }
-        return real;
-    }
-    /**
-     * 🩺 DIAGNÓSTICO DE SALUD (PID Controller Simplificado)
-     */
-    /**
-     * 🩺 DIAGNÓSTICO DE SALUD DE ENJAMBRE (Cluster Health Check)
-     * Compatible con DeepMarketScanner N-Way.
+     * ⚡ LECTURA DE ALTA VELOCIDAD (Zero-Latency)
+     * Este método es llamado por el Scanner en el bucle crítico (Hot Path).
+     * Ya no hace I/O. Solo lee RAM.
      */
     public HealthDirective getAssetHealth(String asset) {
-        long now = System.currentTimeMillis();
-        long lastTime = lastUpdateMap.getOrDefault(asset, 0L);
+        // Si el dato no existe aún (arranque), devolvemos directiva neutra por defecto
+        return directiveCache.computeIfAbsent(asset, k ->
+                new HealthDirective(BotConfig.NORMAL_MIN_PROFIT, Set.of(), Set.of(), "UNKNOWN")
+        );
+    }
 
-        // 1. Check Caché
-        if ((now - lastTime) < (BotConfig.HEALTH_CHECK_INTERVAL * 1000L)) {
-            if (directiveCache.containsKey(asset)) return directiveCache.get(asset);
+    /**
+     * Motor de actualización en segundo plano (Scatter-Gather puro)
+     */
+    private void updateDirectivesBatch(List<String> assets) {
+        // Para cada activo, lanzamos un cálculo de salud
+        for (String asset : assets) {
+            // Nota: Podríamos paralelizar esto aún más, pero el cuello de botella es la API
+            // y ya tenemos paralelismo en el 'fetchBalances'.
+            // Hacemos un cálculo rápido:
+            computeSingleAssetHealth(asset);
         }
+    }
 
-        // 2. Recopilar datos de todo el enjambre
+    private void computeSingleAssetHealth(String asset) {
         Map<String, Double> assetBalances = new HashMap<>();
         Map<String, Double> usdtBalances = new HashMap<>();
-
         double totalAsset = 0;
         double totalUsdt = 0;
 
+        // Recolección (I/O Síncrono pero en hilo de fondo, no duele)
         for (String ex : spatialAccounts) {
             double aBal = connector.fetchBalance(ex, asset);
             double uBal = connector.fetchBalance(ex, "USDT");
 
             assetBalances.put(ex, aBal);
             usdtBalances.put(ex, uBal);
-
             totalAsset += aBal;
             totalUsdt += uBal;
         }
 
-        // 3. Definir "Cuota Justa" (Fair Share)
+        // Lógica de Negocio (CPU)
         double fairShareAsset = (totalAsset > 0) ? (totalAsset / spatialAccounts.size()) : 0;
         double fairShareUsdt = (totalUsdt > 0) ? (totalUsdt / spatialAccounts.size()) : 0;
 
-        // 4. Umbrales Críticos
         double criticalAssetThreshold = fairShareAsset * BotConfig.IMBALANCE_TOLERANCE;
         double criticalUsdtThreshold = fairShareUsdt * BotConfig.IMBALANCE_TOLERANCE;
 
-        // 5. Identificar cuentas "Hambrientas"
-        // preferredBuyers = Cuentas que necesitan STOCK (Asset) -> Prioridad: Comprar aquí
         Set<String> needAsset = new HashSet<>();
-
-        // preferredSellers = Cuentas que necesitan CASH (USDT) -> Prioridad: Vender aquí
         Set<String> needCash = new HashSet<>();
 
         for (String ex : spatialAccounts) {
@@ -153,71 +117,114 @@ public class PortfolioHealthManager {
             if (usdtBalances.get(ex) < criticalUsdtThreshold) needCash.add(ex);
         }
 
-        // 6. Determinar Estado Global
         String state = (needAsset.isEmpty() && needCash.isEmpty()) ? "BALANCED" : "CRITICAL";
         double minProfit = state.equals("BALANCED") ? BotConfig.NORMAL_MIN_PROFIT : BotConfig.EMERGENCY_MIN_PROFIT;
 
-        // ✅ CREAMOS EL RECORD COMPATIBLE CON EL ESCÁNER
-        HealthDirective directive = new HealthDirective(minProfit, needAsset, needCash, state);
-
-        directiveCache.put(asset, directive);
-        lastUpdateMap.put(asset, now);
-
-        return directive;
+        // Escritura Atómica en Caché
+        directiveCache.put(asset, new HealthDirective(minProfit, needAsset, needCash, state));
     }
 
-    // ==========================================
-    // 📦 EL RECORD QUE FALTABA (Versión N-Way)
-    // ==========================================
-    public record HealthDirective(
-            double minProfitPercent,
-            Set<String> preferredBuyers,  // ✅ Ahora sí existe: Exchanges que necesitan STOCK
-            Set<String> preferredSellers, // ✅ Ahora sí existe: Exchanges que necesitan USDT
-            String statusLabel
-    ) {}
-    /**
-     * Calcula el valor total del portafolio en USDT sumando todas las cuentas.
-     */
-    public void performAudit() {
-        BotLogger.info("💰 CFO: Iniciando Auditoría Global de Patrimonio...");
-        double grandTotal = 0.0;
+    // -------------------------------------------------------------------------
+    // MÉTODOS DE APOYO (DISCOVERY Y AUDIT) - OPTIMIZADOS
+    // -------------------------------------------------------------------------
 
-        for (String exchange : spatialAccounts) {
-            try {
-                // 1. Traer saldos
-                Map<String, Double> balances = connector.fetchBalances(exchange);
-                // 2. Traer precios (Batch) para no saturar
-                Map<String, Double> prices = connector.fetchAllPrices(exchange);
+    public List<String> discoverTradableAssets() {
+        if (!BotConfig.AUTO_DISCOVERY) return BotConfig.FIXED_ASSETS;
 
-                double exchangeTotal = 0.0;
+        BotLogger.info("🕵️ CFO: Escaneando Universo (Paralelo)...");
+        try {
+            List<Callable<Set<String>>> tasks = new ArrayList<>();
+            for (String ex : spatialAccounts) {
+                tasks.add(() -> filterDust(ex, connector.fetchBalances(ex)));
+            }
 
-                for (Map.Entry<String, Double> entry : balances.entrySet()) {
-                    String asset = entry.getKey();
-                    double qty = entry.getValue();
+            List<Future<Set<String>>> futures = scatterExecutor.invokeAll(tasks, 5000, TimeUnit.MILLISECONDS);
+            List<Set<String>> results = new ArrayList<>();
+            for (Future<Set<String>> f : futures) {
+                if (f.state() == Future.State.SUCCESS) results.add(f.get());
+            }
 
-                    if (asset.equals("USDT")) {
-                        exchangeTotal += qty;
-                    } else {
-                        // Intentamos buscar el precio
-                        Double price = prices.get(asset + "USDT");
-                        if (price == null) price = prices.get(asset + "-USDT"); // Kucoin fallback
+            if (results.size() < 2) return BotConfig.FIXED_ASSETS;
 
-                        if (price != null) {
-                            exchangeTotal += qty * price;
-                        }
-                    }
-                }
-                grandTotal += exchangeTotal;
-            } catch (Exception e) {
-                BotLogger.warn("⚠️ Error auditando " + exchange + ": " + e.getMessage());
+            Set<String> commonAssets = new HashSet<>(results.get(0));
+            for (int i = 1; i < results.size(); i++) commonAssets.retainAll(results.get(i));
+
+            commonAssets.remove("USDT");
+            List<String> finalAssets = new ArrayList<>(commonAssets);
+
+            // 🔥 TRUCO: Pre-calentamos el cache con los nuevos activos encontrados
+            // Para que la próxima vez que el scanner pregunte, ya tengan datos.
+            BotLogger.info("✅ CFO: Activos comunes detectados: " + finalAssets);
+
+            // Forzamos una actualización inmediata en segundo plano
+            scatterExecutor.submit(() -> updateDirectivesBatch(finalAssets));
+
+            return finalAssets;
+
+        } catch (Exception e) {
+            return BotConfig.FIXED_ASSETS;
+        }
+    }
+
+    private Set<String> filterDust(String exchange, Map<String, Double> balances) {
+        Set<String> real = new HashSet<>();
+        Map<String, Double> allPrices = connector.fetchAllPrices(exchange);
+
+        for (Map.Entry<String, Double> e : balances.entrySet()) {
+            String asset = e.getKey();
+            Double qty = e.getValue();
+            if (asset.equals("USDT")) {
+                if (qty > BotConfig.MIN_ASSET_VALUE_USDT) real.add(asset);
+                continue;
+            }
+            Double price = allPrices.getOrDefault(asset + "USDT", allPrices.get(asset + "-USDT"));
+            if (price != null && (qty * price) > BotConfig.MIN_ASSET_VALUE_USDT) {
+                real.add(asset);
             }
         }
-
-        this.totalEquityUsdt = grandTotal;
-        // BotLogger.info("💰 Resultado Auditoría: $" + String.format("%.2f", grandTotal));
+        return real;
     }
 
-    public double getTotalEquityUsdt() {
-        return totalEquityUsdt;
+    public void performAudit() {
+        DoubleAdder grandTotal = new DoubleAdder();
+        List<Callable<Void>> auditTasks = new ArrayList<>();
+
+        for (String exchange : spatialAccounts) {
+            auditTasks.add(() -> {
+                try {
+                    Map<String, Double> balances = connector.fetchBalances(exchange);
+                    Map<String, Double> prices = connector.fetchAllPrices(exchange);
+                    double exchangeTotal = 0.0;
+                    for (Map.Entry<String, Double> entry : balances.entrySet()) {
+                        String asset = entry.getKey();
+                        if (asset.equals("USDT")) exchangeTotal += entry.getValue();
+                        else {
+                            Double p = prices.getOrDefault(asset + "USDT", prices.get(asset + "-USDT"));
+                            if (p != null) exchangeTotal += entry.getValue() * p;
+                        }
+                    }
+                    grandTotal.add(exchangeTotal);
+                } catch (Exception e) {}
+                return null;
+            });
+        }
+        try {
+            scatterExecutor.invokeAll(auditTasks, 3000, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        this.totalEquityUsdt = grandTotal.sum();
     }
+
+    public double getTotalEquityUsdt() { return totalEquityUsdt; }
+
+    public void shutdown() {
+        heartbeatScheduler.shutdownNow();
+        scatterExecutor.shutdownNow();
+    }
+
+    public record HealthDirective(
+            double minProfitPercent,
+            Set<String> preferredBuyers,
+            Set<String> preferredSellers,
+            String statusLabel
+    ) {}
 }
