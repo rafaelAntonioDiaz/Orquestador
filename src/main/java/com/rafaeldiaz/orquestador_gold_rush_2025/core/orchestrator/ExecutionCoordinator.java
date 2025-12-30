@@ -7,9 +7,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
- * 🚦 ÁRBITRO DE EJECUCIÓN (v4.0 - Fine-Grained Locking / Java 25 Ready)
- * Gestiona locks por cuenta específica para permitir paralelismo real (I/O no bloqueante entre cuentas).
- * Integra Circuit Breaker y prevención de Deadlocks.
+ * 🚦 ÁRBITRO DE EJECUCIÓN (v4.1 - Global Lockdown Ready)
+ * Gestiona locks por cuenta específica para permitir paralelismo real.
+ * Integra Circuit Breaker, prevención de Deadlocks y Kill Switch Global.
  */
 public class ExecutionCoordinator {
 
@@ -24,27 +24,28 @@ public class ExecutionCoordinator {
     private final Map<String, Long> lastAccountUpdate = new ConcurrentHashMap<>();
 
     // 🔐 GESTIÓN DE CONCURRENCIA FÍSICA
-    // Mapa de Mutex: Cada cuenta tiene su propio semáforo.
     private final ConcurrentHashMap<String, ReentrantLock> stripes = new ConcurrentHashMap<>();
 
-    // --- ESTRUCTURA INTERNA LOCK (Java Record para inmutabilidad) ---
+    // 🚨 ESTADO DE EMERGENCIA (Kill Switch)
+    private volatile boolean globalEmergencyState = false;
+
+    // --- ESTRUCTURA INTERNA LOCK ---
     private record LockLease(Thread owner, long expirationTime) {}
 
-    /**
-     * Obtiene el candado físico específico para una cuenta.
-     */
     private ReentrantLock getStripe(String key) {
         return stripes.computeIfAbsent(key, k -> new ReentrantLock());
     }
 
     /**
      * Intenta adquirir acceso para UN solo exchange.
-     * NO bloquea a otros exchanges.
      */
     public boolean tryAcquireLock(String accountName) {
         ReentrantLock lock = getStripe(accountName);
-        lock.lock(); // 🔒 Bloqueo Físico (Solo este hilo toca esta cuenta)
+        lock.lock();
         try {
+            // 🚨 0. CHEQUEO DE EMERGENCIA GLOBAL
+            if (globalEmergencyState) return false;
+
             long now = System.currentTimeMillis();
 
             // 1. 🏥 CHEQUEO DE SALUD
@@ -55,74 +56,63 @@ public class ExecutionCoordinator {
             // 2. 🔐 LÓGICA DE LOCK DE NEGOCIO
             LockLease currentLease = activeLocks.get(accountName);
 
-            // Caso A: Libre
             if (currentLease == null) {
                 grantLock(accountName, now);
                 return true;
             }
 
-            // Caso B: Ocupado pero expirado (Zombie)
             if (now > currentLease.expirationTime()) {
                 BotLogger.warn("🧟 ZOMBIE LOCK en " + accountName + ". Rompiendo candado.");
                 grantLock(accountName, now);
                 return true;
             }
 
-            // Caso C: Ocupado y vigente
             return false;
 
         } finally {
-            lock.unlock(); // 🔓 Liberar Bloqueo Físico
+            lock.unlock();
         }
     }
 
     /**
      * Intenta adquirir acceso para DOS exchanges (Arbitraje).
-     * ⚠️ SAFETY CHECK: Ordena locks para evitar Deadlocks.
      */
     public boolean tryAcquireDualLock(String accountA, String accountB) {
-        // 1. Ordenamos claves lexicográficamente.
-        // Esto garantiza que si Hilo 1 quiere (A, B) y Hilo 2 quiere (B, A),
-        // AMBOS intentarán bloquear A primero. Uno gana, el otro espera.
-        // Sin esto, tendríamos Deadlock.
         String firstKey = accountA.compareTo(accountB) < 0 ? accountA : accountB;
         String secondKey = accountA.compareTo(accountB) < 0 ? accountB : accountA;
 
         ReentrantLock lock1 = getStripe(firstKey);
         ReentrantLock lock2 = getStripe(secondKey);
 
-        lock1.lock(); // 🔒 Adquirir primero
+        lock1.lock();
         try {
-            lock2.lock(); // 🔒 Adquirir segundo
+            lock2.lock();
             try {
+                // 🚨 0. CHEQUEO DE EMERGENCIA GLOBAL
+                if (globalEmergencyState) return false;
+
                 long now = System.currentTimeMillis();
 
-                // Validaciones bajo doble llave
                 if (isInQuarantine(accountA, now) || isInQuarantine(accountB, now)) return false;
                 if (isLockedBusiness(accountA, now) || isLockedBusiness(accountB, now)) return false;
 
-                // Éxito
                 grantLock(accountA, now);
                 grantLock(accountB, now);
                 return true;
 
             } finally {
-                lock2.unlock(); // 🔓 Liberar segundo
+                lock2.unlock();
             }
         } finally {
-            lock1.unlock(); // 🔓 Liberar primero
+            lock1.unlock();
         }
     }
 
-    /**
-     * Libera el lock de negocio.
-     */
     public void releaseLock(String accountName) {
         ReentrantLock lock = getStripe(accountName);
         lock.lock();
         try {
             LockLease currentLease = activeLocks.get(accountName);
-            // Solo el dueño puede liberar
             if (currentLease != null && currentLease.owner() == Thread.currentThread()) {
                 activeLocks.remove(accountName);
             }
@@ -132,11 +122,25 @@ public class ExecutionCoordinator {
     }
 
     // =========================================================================
-    // 🏥 GESTIÓN DE INCIDENTES (Thread-Safe por diseño de ConcurrentMap)
+    // 🛑 GESTIÓN DE EMERGENCIA GLOBAL (Implementación solicitada)
+    // =========================================================================
+
+    public void forceGlobalLockdown(String reason) {
+        this.globalEmergencyState = true;
+        BotLogger.error("🔥🔥🔥 GLOBAL LOCKDOWN ACTIVADO: " + reason + " 🔥🔥🔥");
+        BotLogger.error("⛔ Todas las operaciones han sido suspendidas.");
+    }
+
+    public void liftGlobalLockdown() {
+        this.globalEmergencyState = false;
+        BotLogger.warn("⚠️ ALERTA: Lockdown Global levantado manualmente.");
+    }
+
+    // =========================================================================
+    // 🏥 GESTIÓN DE INCIDENTES
     // =========================================================================
 
     public void reportFailure(String accountName) {
-        // Atomicidad garantizada por compute
         failureCounts.compute(accountName, (key, val) -> {
             AtomicInteger counter = (val == null) ? new AtomicInteger(0) : val;
             int failures = counter.incrementAndGet();
@@ -146,8 +150,8 @@ public class ExecutionCoordinator {
             if (failures >= BotConfig.CB_MAX_CONSECUTIVE_FAILURES) {
                 long releaseTime = System.currentTimeMillis() + BotConfig.CB_QUARANTINE_DURATION_MS;
                 quarantineUntil.put(key, releaseTime);
-                BotLogger.error("🚨 CIRCUIT BREAKER ACTIVADO: " + key + " en cuarentena.");
-            }
+                BotLogger.error("🚨 CIRCUIT BREAKER: " + key + " bloqueado por " +
+                        (BotConfig.CB_QUARANTINE_DURATION_MS / 1000) + "s tras fallos consecutivos.");            }
             return counter;
         });
     }
@@ -159,7 +163,7 @@ public class ExecutionCoordinator {
     }
 
     // =========================================================================
-    // 🕵️ HELPERS & UTILS
+    // 🕵️ HELPERS
     // =========================================================================
 
     private boolean isInQuarantine(String account, long now) {
@@ -179,7 +183,6 @@ public class ExecutionCoordinator {
         activeLocks.put(account, new LockLease(Thread.currentThread(), now + BotConfig.EXECUTION_LOCK_TIMEOUT_MS));
     }
 
-    // Helper interno: asume que ya tenemos el lock físico, solo verifica lógica
     private boolean isLockedBusiness(String account, long now) {
         LockLease lease = activeLocks.get(account);
         if (lease == null) return false;

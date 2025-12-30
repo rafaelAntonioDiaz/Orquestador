@@ -1,0 +1,10 @@
+{
+  "date" : "2025-12-30",
+  "currentCapital" : 100.0,
+  "initialDailyCapital" : 100.0,
+  "peakCapital" : 100.0,
+  "dailyPnL" : 0.0,
+  "status" : "OPERATIONAL",
+  "consecutiveLosses" : 0,
+  "pauseUntilTimestamp" : 0
+}

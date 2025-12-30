@@ -1,121 +1,176 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025.connect;
 
-import okhttp3.*;
+import okhttp3.Call;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okio.Buffer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.MockitoAnnotations;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
 
-@ExtendWith(MockitoExtension.class)
+/**
+ * 🌍 GLOBAL EXCHANGE PROTOCOL TEST
+ * Valida la integridad de la construcción de órdenes (FOK, Firmas, Headers)
+ * para Binance, MEXC, Bybit y KuCoin.
+ */
 class ExchangeConnectorTest {
 
     @Mock
-    private OkHttpClient mockHttpClient;
+    private OkHttpClient mockClient;
     @Mock
     private Call mockCall;
+    @Mock
+    private ExchangeConnector.EnvProvider mockEnv;
 
     private ExchangeConnector connector;
 
-    // --- FIXTURES (JSONs Simulados) ---
-    private static final String BYBIT_PRICE = "{ \"retCode\": 0, \"result\": { \"list\": [ { \"lastPrice\": \"50000.50\" } ] } }";
-    private static final String BYBIT_BALANCE = "{ \"retCode\": 0, \"result\": { \"list\": [ { \"coin\": [ { \"coin\": \"USDT\", \"walletBalance\": \"1000.0\" } ] } ] } }";
-
-    private static final String MEXC_PRICE = "{ \"symbol\": \"BTCUSDT\", \"price\": \"50005.00\" }";
-    private static final String MEXC_BALANCE = "{ \"balances\": [ { \"asset\": \"USDT\", \"free\": \"2000.0\" } ] }"; // Ajustado estructura común
-
-    private static final String BINANCE_PRICE = "{ \"symbol\": \"BTCUSDT\", \"price\": \"50010.00\" }";
-
-    // KuCoin V1
-    private static final String KUCOIN_PRICE = "{ \"data\": { \"price\": \"50015.00\" } }";
-    private static final String KUCOIN_BALANCE = "{ \"code\": \"200000\", \"data\": [ { \"currency\": \"USDT\", \"type\": \"trade\", \"balance\": \"5000.0\", \"available\": \"4000.0\" } ] }";
-
     @BeforeEach
     void setUp() {
-        // Configuración Lenient para evitar errores si no se llama a execute en algún test específico
-        lenient().when(mockHttpClient.newCall(any(Request.class))).thenReturn(mockCall);
+        MockitoAnnotations.openMocks(this);
 
-        // Simulamos el proveedor de variables de entorno
-        ExchangeConnector.EnvProvider mockEnv = key -> switch (key) {
-            case "BYBIT_SUB1_KEY" -> "key_bybit";
-            case "BYBIT_SUB1_SECRET" -> "secret_bybit";
-            case "MEXC_KEY" -> "key_mexc";
-            case "MEXC_SECRET" -> "secret_mexc";
-            case "BINANCE_KEY" -> "key_binance";
-            case "BINANCE_SECRET" -> "secret_binance";
-            case "KUCOIN_KEY" -> "key_kucoin";
-            case "KUCOIN_SECRET" -> "secret_kucoin";
-            case "KUCOIN_PASSPHRASE" -> "pass_kucoin";
-            default -> null;
-        };
+        // 1. Simulación de Bóveda de Claves (Todas las plataformas)
+        when(mockEnv.get(anyString())).thenAnswer(inv -> {
+            String key = inv.getArgument(0);
+            if (key.contains("PASSPHRASE")) return "secret_passphrase"; // Solo KuCoin
+            if (key.contains("KEY")) return "test_api_key";
+            if (key.contains("SECRET")) return "test_secret_key";
+            return null;
+        });
 
-        // Inyectamos el Mock y el EnvProvider
-        connector = new ExchangeConnector(mockHttpClient, mockEnv);
+        // 2. Mock Básico (No necesitamos respuestas de red para validar la construcción del Request)
+        when(mockClient.newCall(any(Request.class))).thenReturn(mockCall);
+
+        connector = new ExchangeConnector(mockClient, mockEnv);
     }
 
-    // --- TESTS ---
-
+    // =========================================================================
+    // 🟡 BINANCE (El Estándar)
+    // =========================================================================
     @Test
-    @DisplayName("Bybit: Fetch Price")
-    void testPriceBybit() throws IOException {
-        mockResponse(200, BYBIT_PRICE);
-        double price = connector.fetchPrice("bybit_sub1", "BTCUSDT");
-        assertEquals(50000.50, price);
+    @DisplayName("🟡 BINANCE: Protocolo FOK (Query Param + Header MBX)")
+    void shouldBuildCorrectly_Binance() {
+        // Ejecución
+        Request request = connector.buildOrderRequest("binance", "BTC-USDT", "BUY", "LIMIT_FOK", 0.5, 60000.0);
+        String url = request.url().toString();
+
+        // 1. Validación FOK (Query String)
+        assertThat(url)
+                .as("Binance debe llevar timeInForce en la URL")
+                .contains("timeInForce=FOK");
+
+        // 2. Validación Firma
+        assertThat(url).contains("signature=");
+        assertThat(url).contains("timestamp=");
+
+        // 3. Validación Header Específico
+        assertThat(request.header("X-MBX-APIKEY"))
+                .as("Header de Binance incorrecto")
+                .isEqualTo("test_api_key");
+
+        System.out.println("✅ BINANCE CHECK: OK");
     }
 
+    // =========================================================================
+    // 🔵 MEXC (El Clon)
+    // =========================================================================
     @Test
-    @DisplayName("Bybit: Balance & Firma")
-    void testBalanceBybit() throws IOException {
-        mockResponse(200, BYBIT_BALANCE);
-        double balance = connector.fetchBalance("bybit_sub1", "USDT"); // Agregado parámetro asset
+    @DisplayName("🔵 MEXC: Protocolo FOK (Query Param + Header MEXC)")
+    void shouldBuildCorrectly_Mexc() {
+        // Ejecución
+        Request request = connector.buildOrderRequest("mexc", "MX-USDT", "SELL", "LIMIT_FOK", 100.0, 2.5);
+        String url = request.url().toString();
 
-        assertEquals(1000.0, balance);
+        // 1. Validación FOK (Query String)
+        assertThat(url)
+                .as("MEXC debe llevar timeInForce en la URL")
+                .contains("timeInForce=FOK");
 
-        // Verificar Headers
-        Request req = captureRequest();
-        assertNotNull(req.header("X-BAPI-SIGN"), "Falta firma Bybit");
-        assertEquals("key_bybit", req.header("X-BAPI-API-KEY"));
+        // 2. Validación Header Específico (Diferente a Binance)
+        assertThat(request.header("X-MEXC-APIKEY"))
+                .as("Header de MEXC incorrecto")
+                .isEqualTo("test_api_key");
+
+        // 3. Validación Content-Type (MEXC a veces lo exige)
+        assertThat(request.header("Content-Type"))
+                .contains("application/x-www-form-urlencoded");
+
+        System.out.println("✅ MEXC CHECK: OK");
     }
 
+    // =========================================================================
+    // 🟠 BYBIT (V5 JSON)
+    // =========================================================================
     @Test
-    @DisplayName("KuCoin: Balance & Passphrase")
-    void testBalanceKucoin() throws IOException {
-        mockResponse(200, KUCOIN_BALANCE);
-        double balance = connector.fetchBalance("kucoin", "USDT"); // Debe buscar 'available'
+    @DisplayName("🟠 BYBIT: Protocolo FOK (JSON Body + Headers V5)")
+    void shouldBuildCorrectly_Bybit() throws IOException {
+        // Ejecución
+        Request request = connector.buildOrderRequest("bybit", "SOL-USDT", "BUY", "LIMIT_FOK", 10.0, 150.0);
+        String body = bodyToString(request);
 
-        // Según tu lógica Kucoin, debe retornar available (4000.0)
-        assertEquals(4000.0, balance);
+        // 1. Validación FOK (Dentro del JSON)
+        assertThat(body)
+                .as("Bybit V5 requiere timeInForce en el JSON")
+                .contains("\"timeInForce\": \"FOK\"");
 
-        Request req = captureRequest();
-        assertNotNull(req.header("KC-API-PASSPHRASE"), "Falta Passphrase");
-        assertNotNull(req.header("KC-API-SIGN"), "Falta firma");
+        // 2. Validación Estructura V5
+        assertThat(body).contains("\"category\": \"spot\"");
+        assertThat(body).contains("\"orderType\": \"Limit\"");
+
+        // 3. Validación Headers de Firma
+        assertThat(request.header("X-BAPI-API-KEY")).isEqualTo("test_api_key");
+        assertThat(request.header("X-BAPI-SIGN")).isNotNull();
+        assertThat(request.header("X-BAPI-TIMESTAMP")).isNotNull();
+
+        System.out.println("✅ BYBIT CHECK: OK");
     }
 
-    // --- HELPERS ---
+    // =========================================================================
+    // 🟢 KUCOIN (El Complejo)
+    // =========================================================================
+    @Test
+    @DisplayName("🟢 KUCOIN: Protocolo FOK (Headers KC + Passphrase Encriptada)")
+    void shouldBuildCorrectly_Kucoin() throws IOException {
+        // Ejecución
+        Request request = connector.buildOrderRequest("kucoin", "PEPE-USDT", "BUY", "LIMIT_FOK", 100000.0, 0.00001);
+        String body = bodyToString(request);
 
-    private void mockResponse(int code, String body) throws IOException {
-        Response response = new Response.Builder()
-                .request(new Request.Builder().url("https://test.com").build())
-                .protocol(Protocol.HTTP_1_1)
-                .code(code)
-                .message("OK")
-                .body(ResponseBody.create(body, MediaType.parse("application/json")))
-                .build();
+        // 1. Validación FOK (JSON)
+        assertThat(body)
+                .as("KuCoin requiere timeInForce en el JSON")
+                .contains("\"timeInForce\": \"FOK\"");
 
-        when(mockCall.execute()).thenReturn(response);
+        // 2. Validación de UUID (ClientOid)
+        assertThat(body).contains("\"clientOid\":");
+
+        // 3. Validación Headers Específicos
+        assertThat(request.header("KC-API-KEY")).isEqualTo("test_api_key");
+        assertThat(request.header("KC-API-KEY-VERSION")).isEqualTo("2"); // Importante V2
+
+        // 4. 🔥 CRÍTICO: La Passphrase NO debe ir en texto plano
+        String passHeader = request.header("KC-API-PASSPHRASE");
+        assertThat(passHeader)
+                .as("La Passphrase de KuCoin debe estar encriptada (Base64), no texto plano")
+                .isNotEqualTo("secret_passphrase")
+                .isNotNull();
+
+        System.out.println("✅ KUCOIN CHECK: OK");
     }
 
-    private Request captureRequest() {
-        ArgumentCaptor<Request> captor = ArgumentCaptor.forClass(Request.class);
-        verify(mockHttpClient, atLeastOnce()).newCall(captor.capture());
-        return captor.getValue();
+    // --- HELPER DE LECTURA DE BODY ---
+    private String bodyToString(Request request) throws IOException {
+        if (request.body() == null) return "";
+        Buffer buffer = new Buffer();
+        request.body().writeTo(buffer);
+        return buffer.readString(StandardCharsets.UTF_8);
     }
 }

@@ -3,189 +3,226 @@ package com.rafaeldiaz.orquestador_gold_rush_2025.execution;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.BotConfig; // <--- LA FUENTE DE LA VERDAD
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.ExecutionCoordinator;
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 
 import java.io.File;
 import java.io.IOException;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * 📉 RISK MANAGEMENT SYSTEM (Módulo de Control de Riesgo y Persistencia)
- *
- * RESPONSABILIDAD:
- * 1. Monitorear la Curva de Equidad (Equity Curve) en tiempo real.
- * 2. Ejecutar Disyuntores (Circuit Breakers) ante violaciones de parámetros de riesgo.
- * 3. Persistir el estado financiero (PnL Diario, Drawdown) para continuidad operativa.
- *
- * MODELO MATEMÁTICO:
- * - Daily Stop: PnL_Diario < -(Capital_Inicial * 0.02)
- * - Max Drawdown: (Peak_Capital - Current_Capital) / Peak_Capital > 0.08
+ * 📉 RISK MANAGEMENT SYSTEM (Versión Sincronizada con BotConfig)
+ * Totalmente desacoplado de valores hardcodeados.
  */
 public class RiskManager {
+    private final ExecutionCoordinator coordinator;
+    private final String stateFile;
 
-    // --- PARÁMETROS DE RIESGO (HARD LIMITS) ---
-    private static final double MAX_DAILY_LOSS_PERCENT = 0.02; // Límite de pérdida diaria (2%)
-    private static final double MAX_DRAWDOWN_PERCENT = 0.08;   // Drawdown Máximo permitido (8%)
-    private static final int MAX_CONSECUTIVE_FAILURES = 3;     // Límite de fallos de ejecución consecutivos
-    private static final String STATE_FILE = "financial_state.json"; // Archivo de persistencia
+    // --- VARIABLES DE ESTADO ---
+    private double initialDailyCapital;
+    private double currentCapital;
+    private double peakCapital;
+    private double dailyPnL = 0.0;
 
-    // --- VARIABLES DE ESTADO (MEMORY HEAP) ---
-    private double initialDailyCapital; // Capital al inicio de la sesión (00:00)
-    private double currentCapital;      // Equity actual (Mark-to-Market)
-    private double peakCapital;         // High-Water Mark (Máximo histórico)
-    private double dailyPnL = 0.0;      // Profit and Loss acumulado del día
+    // Contadores Dinámicos
+    private int consecutiveLosses = 0;
+    private long pauseUntilTimestamp = 0;
 
     private final ObjectMapper mapper = new ObjectMapper();
-
-    // Contadores de Desviación
-    private final AtomicInteger executionFailures = new AtomicInteger(0);
     private final AtomicReference<SystemStatus> status = new AtomicReference<>(SystemStatus.OPERATIONAL);
 
-    // Estados del Autómata Finito
     public enum SystemStatus {
-        OPERATIONAL,        // Sistema nominal
-        PAUSED_DEVIATION,   // Pausa técnica por anomalías consecutivas
-        HALTED_DAILY_LIMIT, // Detenido: Límite de riesgo diario alcanzado
-        HALTED_DRAWDOWN     // Detenido: Violación de Max Drawdown (Requiere auditoría)
+        OPERATIONAL,
+        PAUSED_DEVIATION,
+        HALTED_DAILY_LIMIT,
+        HALTED_DRAWDOWN
     }
 
-    public RiskManager(double startCapital) {
-        // Inicialización por defecto
+    public RiskManager(double startCapital, ExecutionCoordinator coordinator) {
+        this(coordinator, startCapital, "financial_state.json");
+    }
+
+    public RiskManager(ExecutionCoordinator coordinator, double startCapital, String customStateFile) {
+        this.coordinator = coordinator;
+        this.stateFile = customStateFile;
         this.currentCapital = startCapital;
         this.initialDailyCapital = startCapital;
         this.peakCapital = startCapital;
 
-        BotLogger.info("🛡️ RiskManager: Iniciando secuencia de carga de estado...");
-        loadFinancialState(); // Carga de persistencia
+        BotLogger.info("🛡️ RiskManager: Iniciando carga de estado desde: " + stateFile);
+        loadFinancialState();
 
-        BotLogger.info(String.format("📊 ESTADO FINANCIERO INICIAL: Equity: $%.2f | PnL Diario: $%.2f | High-Water Mark: $%.2f",
-                currentCapital, dailyPnL, peakCapital));
+        // Log de parámetros cargados desde BotConfig para auditoría
+        BotLogger.info(String.format("🛡️ PARÁMETROS: MaxLoss=%.1f%% | MaxDD=%.1f%% | MaxStreak=%d",
+                BotConfig.RISK_MAX_DAILY_LOSS * 100,
+                BotConfig.RISK_MAX_DRAWDOWN * 100,
+                BotConfig.RISK_MAX_CONSECUTIVE_LOSSES));
 
-        validateRiskParameters(); // Validación inicial pre-arranque
+        validateRiskParameters();
     }
 
-    /**
-     * Valida si el sistema tiene autorización para operar según los parámetros de riesgo.
-     */
     public synchronized boolean canExecuteTrade() {
+        // Chequeo de Pausa Temporal (Cooldown)
+        if (status.get() == SystemStatus.PAUSED_DEVIATION) {
+            if (System.currentTimeMillis() > pauseUntilTimestamp) {
+                BotLogger.info("🟢 COOLDOWN FINALIZADO. Reactivando sistema tras pausa por racha.");
+                status.set(SystemStatus.OPERATIONAL);
+                consecutiveLosses = 0;
+                return true;
+            }
+            return false;
+        }
+
         if (status.get() != SystemStatus.OPERATIONAL) {
-            BotLogger.warn("⛔ OPERACIÓN DENEGADA. Estatus del Sistema: " + status.get());
+            BotLogger.warn("⛔ OPERACIÓN DENEGADA. Estatus: " + status.get());
             return false;
         }
         return true;
     }
 
-    /**
-     * Registra el resultado matemático de una operación y actualiza la curva de equidad.
-     * @param pnlUSD Resultado neto de la operación (Net Profit/Loss)
-     */
-// RiskManager.java optimizado
     public synchronized void reportTradeResult(double pnlUSD) {
-        // 1. Actualización en RAM (Nanosegundos)
         currentCapital += pnlUSD;
         dailyPnL += pnlUSD;
         if (currentCapital > peakCapital) peakCapital = currentCapital;
 
-        // Lógica de circuito (rápida)
-        if (pnlUSD < 0) { /* lógica de fallos */ }
-        validateRiskParameters();
+        // Lógica de Racha
+        if (pnlUSD < 0) {
+            consecutiveLosses++;
+            BotLogger.warn("📉 PÉRDIDA REGISTRADA. Racha Actual: " + consecutiveLosses);
+        } else if (pnlUSD > 0) {
+            if (consecutiveLosses > 0) BotLogger.info("✨ RACHA NEGATIVA ROMPIDA.");
+            consecutiveLosses = 0;
+        }
 
-        // 2. Persistencia ASÍNCRONA (Fire & Forget)
-        // No bloqueamos el hilo de trading esperando al disco duro
+        validateRiskParameters();
         CompletableFuture.runAsync(this::saveFinancialState);
     }
-    /**
-     * Evalúa las condiciones de parada (Circuit Breakers).
-     */
-    private void validateRiskParameters() {
-        // A. Disyuntor Diario (Daily Stop Loss)
-        // Cálculo estricto sobre el capital inicial del día
-        double dailyLossRatio = -dailyPnL / initialDailyCapital;
 
-        if (dailyPnL < 0 && dailyLossRatio >= MAX_DAILY_LOSS_PERCENT) {
+    private void validateRiskParameters() {
+        // A. Disyuntor Diario
+        double dailyLossRatio = -dailyPnL / initialDailyCapital;
+        // USO DE BOTCONFIG
+        if (dailyPnL < 0 && dailyLossRatio >= BotConfig.RISK_MAX_DAILY_LOSS) {
             status.set(SystemStatus.HALTED_DAILY_LIMIT);
-            BotLogger.error(String.format("🛑 DISYUNTOR DIARIO ACTIVADO. Pérdida: %.2f%% (Límite: %.2f%%). Ejecución detenida.",
-                    dailyLossRatio * 100, MAX_DAILY_LOSS_PERCENT * 100));
+            String msg = String.format("🛑 DISYUNTOR DIARIO ACTIVADO. Pérdida: %.2f%%.", dailyLossRatio * 100);
+            BotLogger.error(msg);
+            coordinator.forceGlobalLockdown("DAILY_LOSS_LIMIT");
+            return;
         }
 
-        // B. Disyuntor de Drawdown (Protección de Capital Base)
+        // B. Disyuntor Drawdown
         double currentDrawdown = (peakCapital - currentCapital) / peakCapital;
-        if (currentDrawdown >= MAX_DRAWDOWN_PERCENT) {
+        // USO DE BOTCONFIG
+        if (currentDrawdown >= BotConfig.RISK_MAX_DRAWDOWN) {
             status.set(SystemStatus.HALTED_DRAWDOWN);
-            BotLogger.error(String.format("💀 CRITICAL DRAWDOWN DETECTADO (%.2f%%). Sistema bloqueado por seguridad.",
-                    currentDrawdown * 100));
+            BotLogger.error(String.format("💀 CRITICAL DRAWDOWN (%.2f%%).", currentDrawdown * 100));
+            // coordinator.forceGlobalLockdown("MAX_DRAWDOWN");
+            return;
+        }
+
+        // C. Disyuntor de Racha (Streak Breaker)
+        // USO DE BOTCONFIG
+        if (consecutiveLosses >= BotConfig.RISK_MAX_CONSECUTIVE_LOSSES) {
+            status.set(SystemStatus.PAUSED_DEVIATION);
+            this.pauseUntilTimestamp = System.currentTimeMillis() + BotConfig.RISK_STREAK_PAUSE_MS;
+
+            BotLogger.warn("⚠️ RACHA DE PÉRDIDAS (>limit). Pausando sistema por enfriamiento.");
+            BotLogger.warn("   -> Reactivación programada: " + Instant.ofEpochMilli(pauseUntilTimestamp));
         }
     }
-
-    // =========================================================
-    // 💾 CAPA DE PERSISTENCIA (I/O)
-    // =========================================================
 
     private void saveFinancialState() {
         try {
             ObjectNode node = mapper.createObjectNode();
-            node.put("date", LocalDate.now().toString()); // Fecha contable
+            node.put("date", LocalDate.now().toString());
             node.put("currentCapital", currentCapital);
             node.put("initialDailyCapital", initialDailyCapital);
             node.put("peakCapital", peakCapital);
             node.put("dailyPnL", dailyPnL);
             node.put("status", status.get().name());
+            node.put("consecutiveLosses", consecutiveLosses);
+            node.put("pauseUntilTimestamp", pauseUntilTimestamp);
 
-            mapper.writerWithDefaultPrettyPrinter().writeValue(new File(STATE_FILE), node);
+            mapper.writerWithDefaultPrettyPrinter().writeValue(new File(this.stateFile), node);
         } catch (IOException e) {
-            BotLogger.error("⚠️ Error Crítico I/O: No se pudo persistir el estado financiero: " + e.getMessage());
+            BotLogger.error("⚠️ Error I/O RiskManager: " + e.getMessage());
         }
     }
 
     private void loadFinancialState() {
-        File file = new File(STATE_FILE);
-        if (!file.exists()) return; // Inicialización limpia (Primer despliegue)
+        File file = new File(this.stateFile);
+        if (!file.exists()) return;
 
         try {
             JsonNode node = mapper.readTree(file);
             String savedDate = node.path("date").asText();
             String today = LocalDate.now().toString();
 
-            // Recuperación de métricas globales
             this.currentCapital = node.path("currentCapital").asDouble(currentCapital);
             this.peakCapital = node.path("peakCapital").asDouble(peakCapital);
+            this.consecutiveLosses = node.path("consecutiveLosses").asInt(0);
+            this.pauseUntilTimestamp = node.path("pauseUntilTimestamp").asLong(0);
 
             if (savedDate.equals(today)) {
-                // CONTINUIDAD DE SESIÓN (Mismo día contable)
-                BotLogger.info("🔄 Sesión recuperada. Manteniendo contabilidad intradiaria.");
+                BotLogger.info("🔄 Sesión recuperada.");
                 this.initialDailyCapital = node.path("initialDailyCapital").asDouble(initialDailyCapital);
                 this.dailyPnL = node.path("dailyPnL").asDouble(0.0);
-
-                String savedStatus = node.path("status").asText("OPERATIONAL");
-                this.status.set(SystemStatus.valueOf(savedStatus));
-
+                this.status.set(SystemStatus.valueOf(node.path("status").asText("OPERATIONAL")));
             } else {
-                // NUEVA SESIÓN CONTABLE (Rollover diario)
-                BotLogger.info("☀️ Inicio de Nueva Sesión Contable. Reseteando métricas intradiarias.");
-
-                // El cierre de ayer es la apertura de hoy
+                BotLogger.info("☀️ Nueva Sesión Contable.");
                 this.initialDailyCapital = this.currentCapital;
                 this.dailyPnL = 0.0;
-                this.status.set(SystemStatus.OPERATIONAL); // Restablecimiento operativo
-
-                saveFinancialState(); // Inicializar archivo para el nuevo día
+                this.status.set(SystemStatus.OPERATIONAL);
+                this.consecutiveLosses = 0;
+                this.pauseUntilTimestamp = 0;
+                saveFinancialState();
             }
-
         } catch (IOException e) {
-            BotLogger.error("⚠️ Corrupción de datos o error de lectura. Iniciando con parámetros por defecto: " + e.getMessage());
+            BotLogger.error("⚠️ Error carga RiskManager: " + e.getMessage());
         }
     }
 
-    /**
-     * Intervención humana para restablecer el sistema tras una pausa técnica.
-     */
     public void overrideLockdown() {
         status.set(SystemStatus.OPERATIONAL);
-        executionFailures.set(0);
-        BotLogger.warn("🔓 INTERVENCIÓN MANUAL: Protocolos de bloqueo restablecidos por operador.");
+        consecutiveLosses = 0;
+        pauseUntilTimestamp = 0;
+        BotLogger.warn("🔓 INTERVENCIÓN MANUAL: Sistema restablecido.");
         saveFinancialState();
+    }
+
+    public boolean runMonteCarloSimulation(double winRate, double avgWin, double avgLoss) {
+        int simulations = 1000;
+        int tradesPerSim = 100;
+        int ruinCount = 0;
+        double ruinThreshold = currentCapital * 0.80;
+
+        java.util.concurrent.ThreadLocalRandom random = java.util.concurrent.ThreadLocalRandom.current();
+
+        for (int i = 0; i < simulations; i++) {
+            double simulatedEquity = currentCapital;
+            for (int t = 0; t < tradesPerSim; t++) {
+                if (random.nextDouble() < winRate) simulatedEquity += avgWin;
+                else simulatedEquity -= avgLoss;
+
+                if (simulatedEquity < ruinThreshold) {
+                    ruinCount++;
+                    break;
+                }
+            }
+        }
+        double ruinProbability = (double) ruinCount / simulations;
+        BotLogger.info(String.format("🎲 Monte Carlo: Prob. Ruina (20%% drawdown) = %.2f%%", ruinProbability * 100));
+
+        // USO DE BOTCONFIG
+        if (ruinProbability > BotConfig.RISK_MC_RUIN_THRESHOLD) {
+            BotLogger.error("🚨 MONTE CARLO ALERT: Riesgo estadístico inaceptable. Bloqueando.");
+            status.set(SystemStatus.HALTED_DRAWDOWN);
+            return false;
+        }
+        return true;
     }
 }

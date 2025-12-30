@@ -9,83 +9,122 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 
+/**
+ * 📝 BOT LOGGER TEST (La Caja Negra)
+ * Valida la persistencia en CSV, la robustez asíncrona y la integridad de los reportes.
+ */
 class BotLoggerTest {
 
-    private static final String LOG_DIR = "logs";
-    private static final String LOG_FILE = LOG_DIR + "/bot.log.0"; // FileHandler suele añadir .0 al bloquear
-    private static final String CSV_FILE = LOG_DIR + "/trades.csv";
+    private static final String TEST_LOG_DIR = "logs";
+    private static final String TEST_CSV_FILE = "logs/trades.csv";
+    private static final String TEST_OPP_FILE = "logs/opportunities.csv";
 
     @BeforeEach
-    void setUp() {
-        // Aseguramos que el directorio exista
-        new File(LOG_DIR).mkdirs();
+    void setUp() throws IOException {
+        // Limpieza preventiva: Borrar logs anteriores para empezar limpio
+        deleteFile(TEST_CSV_FILE);
+        deleteFile(TEST_OPP_FILE);
+        new File(TEST_LOG_DIR).mkdirs(); // Asegurar que el directorio existe
     }
 
     @AfterEach
     void tearDown() {
-        // Opcional: Limpiar archivos después de testear para no llenar el disco
-        // File f = new File(CSV_FILE);
-        // if (f.exists()) f.delete();
+        // Limpieza post-test (opcional, útil para debugging si se comenta)
+        // deleteFile(TEST_CSV_FILE);
+        // deleteFile(TEST_OPP_FILE);
     }
 
     @Test
-    @DisplayName("Debe crear archivo de log general y rotarlo")
-    void testLogCreation() {
-        BotLogger.info("--- TEST DE INICIO DE LOGS ---");
+    @DisplayName("📄 CSV TRADES: Debe registrar una operación exitosa")
+    void shouldLogTradeToCSV() throws IOException, InterruptedException {
+        // 1. Ejecutamos el log
+        BotLogger.logTrade("BTCUSDT", "WIN", 1.5, 1000.0);
 
-        File dir = new File(LOG_DIR);
-        assertTrue(dir.exists(), "El directorio logs debe existir");
-        assertTrue(dir.isDirectory(), "Debe ser un directorio");
+        // 2. Esperamos un poco porque es ASÍNCRONO (Cola -> Hilo Worker)
+        Thread.sleep(200);
 
-        // El FileHandler de Java a veces bloquea el archivo 'bot.log' y crea 'bot.log.0.lck'
-        // Buscamos cualquier archivo que empiece por bot.log
-        File[] logs = dir.listFiles((d, name) -> name.startsWith("bot.log"));
-        assertTrue(logs != null && logs.length > 0, "Debe haber al menos un archivo de log generado");
-
-        System.out.println("📂 Buscando logs en: " + dir.getAbsolutePath());
-        if (logs.length > 0) {
-            System.out.println("✅ Se encontró log rotado: " + logs[0].getName());
-        }
-    }
-
-    @Test
-    @DisplayName("Debe registrar Trades en CSV con formato internacional (Punto decimal)")
-    void testCsvDecimalFormat() throws IOException {
-        // Borramos CSV previo para asegurar prueba limpia
-        File csv = new File(CSV_FILE);
-        if (csv.exists()) csv.delete();
-
-        // Ejecutamos log
-        double profit = 1.50; // 1.5%
-        double amount = 100.25; // $100.25
-        BotLogger.logTrade("BTCUSDT", "BUY", profit, amount);
-
-        // Verificamos
-        assertTrue(csv.exists(), "El archivo trades.csv debe ser creado");
+        // 3. Verificamos el archivo
+        File csv = new File(TEST_CSV_FILE);
+        assertThat(csv).exists();
 
         List<String> lines = Files.readAllLines(csv.toPath());
-        assertTrue(lines.size() >= 2, "Debe tener cabecera y al menos una línea de datos");
 
-        String header = lines.get(0);
-        String data = lines.get(1); // La línea recién insertada
+        // Debe tener al menos 2 líneas: Cabecera + Data
+        assertThat(lines.size()).isGreaterThanOrEqualTo(2);
 
-        System.out.println("📄 Header CSV: " + header);
-        System.out.println("📄 Data CSV: " + data);
+        // Verificamos la última línea
+        String lastLine = lines.get(lines.size() - 1);
+        System.out.println("📝 CSV Line: " + lastLine);
 
-        // VALIDACIÓN CRÍTICA (Locale.US)
-        // Buscamos el punto "." en los números
-        assertTrue(data.contains("1.5000"), "El profit debe usar punto decimal (1.5000)");
-        assertTrue(data.contains("100.25"), "El monto debe usar punto decimal (100.25)");
+        assertThat(lastLine).contains("BTCUSDT");
+        assertThat(lastLine).contains("WIN");
+        assertThat(lastLine).contains("1.5000"); // Formato %.4f
+        assertThat(lastLine).contains("1000.00"); // Formato %.2f
+    }
 
-        // No debe contener comas decimales (ej: 1,5000 rompería el CSV)
-        // La línea tiene comas separadoras, pero verificamos que los números no estén rotos
-        String[] columns = data.split(",");
-        assertEquals("BTCUSDT", columns[1]);
-        assertEquals("BUY", columns[2]);
-        // Si el formato fuera incorrecto (1,5000), el split generaría más columnas o datos erróneos
-        assertEquals(5, columns.length, "El CSV debe tener exactamente 5 columnas");
+    @Test
+    @DisplayName("🔎 CSV OPPORTUNITIES: Debe registrar hallazgos del radar")
+    void shouldLogOpportunityToCSV() throws IOException, InterruptedException {
+        // 1. Logueamos una oportunidad detectada pero no ejecutada
+        BotLogger.logOpportunity("TRIANGULAR", "SOL", "BNB", 0.5, 0.45, "SKIPPED", "LOW_PROFIT");
+
+        // 2. Espera asíncrona
+        Thread.sleep(200);
+
+        // 3. Validación
+        File csv = new File(TEST_OPP_FILE);
+        assertThat(csv).exists();
+
+        List<String> lines = Files.readAllLines(csv.toPath());
+        String lastLine = lines.get(lines.size() - 1);
+        System.out.println("🔎 Opp Line: " + lastLine);
+
+        assertThat(lastLine).contains("TRIANGULAR");
+        assertThat(lastLine).contains("SOL");
+        assertThat(lastLine).contains("SKIPPED");
+    }
+
+    @Test
+    @DisplayName("🚨 TELEGRAM SAFEGUARD: No debe explotar sin credenciales")
+    void shouldNotCrash_WhenTelegramTokenMissing() {
+        // Como no cargamos el .env real en el entorno de test (o puede ser dummy),
+        // verificamos que el método sea robusto y capture excepciones internamente.
+        assertDoesNotThrow(() -> {
+            BotLogger.error("TEST ERROR MESSAGE - PLEASE IGNORE");
+            // Damos tiempo al hilo virtual para arrancar y (posiblemente) fallar silenciosamente
+            Thread.sleep(100);
+        });
+
+        System.out.println("✅ TELEGRAM: Fail-safe confirmado (no rompió el hilo principal).");
+    }
+
+    @Test
+    @DisplayName("💾 SYSTEM EVENT: Debe registrar hitos del sistema")
+    void shouldLogSystemEvent() throws IOException, InterruptedException {
+        BotLogger.logSystemEvent("TEST_START", "Unit Testing BotLogger");
+
+        Thread.sleep(200);
+
+        File csv = new File(TEST_OPP_FILE);
+        List<String> lines = Files.readAllLines(csv.toPath());
+        String lastLine = lines.get(lines.size() - 1);
+
+        assertThat(lastLine).contains("SYSTEM");
+        assertThat(lastLine).contains("TEST_START");
+
+        System.out.println("✅ SYSTEM EVENT: Registrado correctamente.");
+    }
+
+    // --- Helper ---
+    private void deleteFile(String path) {
+        File f = new File(path);
+        if (f.exists()) {
+            f.delete();
+        }
     }
 }

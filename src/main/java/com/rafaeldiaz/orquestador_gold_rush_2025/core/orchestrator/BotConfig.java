@@ -1,5 +1,7 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator;
 
+import com.rafaeldiaz.orquestador_gold_rush_2025.execution.RiskManager;
+import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 import io.github.cdimascio.dotenv.Dotenv;
 
 import java.util.Arrays;
@@ -84,8 +86,44 @@ public class BotConfig {
     public static final double TRADE_SIZE_PERCENT = Double.parseDouble(dotenv.get("TRADE_SIZE_PERCENT", "0.95").trim());
     public static final double IMBALANCE_TOLERANCE = Double.parseDouble(dotenv.get("IMBALANCE_TOLERANCE", "0.20").trim());
     public static final int HEALTH_CHECK_INTERVAL = Integer.parseInt(dotenv.get("HEALTH_CHECK_INTERVAL", "10").trim());
+    // ==========================================
+    // 7. GESTIÓN DE RIESGO FINANCIERO (CFO)
+    // ==========================================
+    public static final double RISK_MAX_DAILY_LOSS = Double.parseDouble(dotenv.get("RISK_MAX_DAILY_LOSS", "0.02").trim()); // 2%
+    public static final double RISK_MAX_DRAWDOWN = Double.parseDouble(dotenv.get("RISK_MAX_DRAWDOWN", "0.08").trim());     // 8%
 
+    public static final int RISK_MAX_CONSECUTIVE_LOSSES = Integer.parseInt(dotenv.get("RISK_MAX_CONSECUTIVE_LOSSES", "5").trim());
+    public static final long RISK_STREAK_PAUSE_MS = Long.parseLong(dotenv.get("RISK_STREAK_PAUSE_MS", "3600000").trim()); // 1 hora
 
+    // 🎲 PARÁMETROS DE SIMULACIÓN (MONTE CARLO)
+    public static final double RISK_MC_RUIN_THRESHOLD = 0.05; // 5% Probabilidad máxima de ruina aceptada
+
+    public static final double RISK_SIM_WIN_RATE = Double.parseDouble(dotenv.get("RISK_SIM_WIN_RATE", "0.80"));
+    public static final double RISK_SIM_AVG_WIN = Double.parseDouble(dotenv.get("RISK_SIM_AVG_WIN", "2.0"));
+    public static final double RISK_SIM_AVG_LOSS = Double.parseDouble(dotenv.get("RISK_SIM_AVG_LOSS", "2.0"));
+
+    // ... resto de la clase ... // -------------------------------------------------------------------------
+    // 3. 🎲 RISK MODEL (Monte Carlo en el arranque)
+    // -------------------------------------------------------------------------
+    private static void checkRiskModels(RiskManager riskManager) {
+        BotLogger.info("🎲 [RISK] Ejecutando Simulación de Monte Carlo (Perfil Configurado)...");
+        BotLogger.info(String.format("   -> Target WinRate: %.0f%% | AvgWin: $%.2f | AvgLoss: $%.2f",
+                BotConfig.RISK_SIM_WIN_RATE * 100,
+                BotConfig.RISK_SIM_AVG_WIN,
+                BotConfig.RISK_SIM_AVG_LOSS));
+
+        // ✅ CORRECCIÓN: Usando variables de entorno, no números mágicos
+        boolean passed = riskManager.runMonteCarloSimulation(
+                BotConfig.RISK_SIM_WIN_RATE,
+                BotConfig.RISK_SIM_AVG_WIN,
+                BotConfig.RISK_SIM_AVG_LOSS
+        );
+
+        if (!passed) {
+            throw new RuntimeException("RIESGO INACEPTABLE: Monte Carlo predice ruina > " + (BotConfig.RISK_MC_RUIN_THRESHOLD * 100) + "%.");
+        }
+        BotLogger.info("✅ [RISK] Modelos matemáticos estables.");
+    }
     // =========================================================================
     // 🛠️ HERRAMIENTAS Y PARSERS
     // =========================================================================

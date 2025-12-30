@@ -1,206 +1,125 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
-import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeStrategy;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.PortfolioHealthManager;
-import com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner.MarketListener;
-import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.FeeManager;
-import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.ProfitCalculator;
-import com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner.DynamicPairSelector;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner.DeepMarketScanner;
 import com.rafaeldiaz.orquestador_gold_rush_2025.execution.RiskManager;
-import com.rafaeldiaz.orquestador_gold_rush_2025.execution.TradeExecutor;
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 
-import java.time.LocalTime;
-import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.LongAdder;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
- * 🎼 DIRECTOR DE ORQUESTA (VERSIÓN BLINDADA & SINCRONIZADA v2.0)
+ * 🎼 GOLD RUSH ORCHESTRATOR (v3.1 - PRE-FLIGHT READY)
+ * El Director Ejecutivo. Gestiona el ciclo de vida y la validación de despegue.
  */
-public class GoldRushOrchestrator implements MarketListener {
+public class GoldRushOrchestrator {
 
-    private final List<ExchangeStrategy> strategies;
-    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
-    private final ExecutorService virtualExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    // Componentes Estructurales
+    private final ExchangeConnector connector;
+    private final ExecutionCoordinator coordinator;
 
-    private final FeeManager feeManager;
-    private final ProfitCalculator profitCalculator;
-    private final DynamicPairSelector pairSelector;
-    private final TradeExecutor executor; // <--- El Músculo
-    private final RiskManager riskManager; // <--- El Gobernador
+    // Departamentos Especializados
+    private final RiskManager riskManager;
+    private final PortfolioHealthManager cfo;
+    private final DeepMarketScanner scanner;
 
-    private final List<String> activeTargets = new CopyOnWriteArrayList<>();
-    private final double capital = 300.0;
-    private final DateTimeFormatter timeFmt = DateTimeFormatter.ofPattern("HH:mm:ss.SSS");
+    // Control de Tiempo
+    private final CountDownLatch missionLatch = new CountDownLatch(1);
 
-    // Estadísticas
-    private final LongAdder totalScans = new LongAdder();
-    private final LongAdder positiveSpreads = new LongAdder();
-    private double bestNetProfit = -9999.0;
-    private String bestPairLog = "N/A";
+    public GoldRushOrchestrator(ExchangeConnector connector, ExecutionCoordinator coordinator) {
+        this.connector = connector;
+        this.coordinator = coordinator;
 
-    public GoldRushOrchestrator(List<ExchangeStrategy> strategies, ExchangeConnector connector) {
-        this.strategies = strategies;
+        BotLogger.info("🏗️ DIRECTOR: Ensamblando departamentos...");
 
-        // 1. Inicializamos FeeManager PRIMERO (Crítico para que no sea null)
-        this.feeManager = new FeeManager(connector);
+        // 1. Departamento de Riesgo
+        this.riskManager = new RiskManager(BotConfig.SEED_CAPITAL, coordinator);
 
-        this.profitCalculator = new ProfitCalculator();
-        this.riskManager = new RiskManager(capital);
+        // 2. Departamento Financiero (CFO)
+        this.cfo = new PortfolioHealthManager(connector);
 
-        // 2. Inicializamos Executor pasándole AMBOS componentes (Corrección aplicada)
-        this.executor = new TradeExecutor(connector, this.feeManager);
-        this.executor.setDryRun(true);
-        PortfolioHealthManager cfo = new PortfolioHealthManager(connector);
-        this.pairSelector = new DynamicPairSelector(connector, this, feeManager, cfo);
-        this.activeTargets.add("SOLUSDT");
+        // 3. Departamento de Inteligencia (Cerebro)
+        this.scanner = new DeepMarketScanner(connector, coordinator);
+        this.scanner.injectCFO(cfo);
+        this.scanner.setDryRun(BotConfig.DRY_RUN);
     }
 
-    @Override
-    public void updateTargets(List<String> newTargets) {
-        if (!newTargets.isEmpty()) {
-            activeTargets.clear();
-            activeTargets.addAll(newTargets);
-            BotLogger.info("🎯 ORQUESTADOR: Objetivos -> " + activeTargets);
-        }
-    }
-
-    public void startSurveillance() {
-        BotLogger.info("🔭 ORQUESTADOR INICIANDO VIGILANCIA...");
-        BotLogger.info("   ↳ RiskManager: ACTIVO (-2% Daily / -8% DD)");
-        pairSelector.start();
-        scheduler.scheduleAtFixedRate(this::scanMarkets, 1, 3, TimeUnit.SECONDS);
-    }
-
-    private void scanMarkets() {
+    /**
+     * 🚀 INICIA LA MISIÓN
+     * Ejecuta PreFlightCheck -> Arranca Scanner -> Espera -> Apaga.
+     */
+    public void startMission() {
         try {
-            if (!riskManager.canExecuteTrade()) {
-                BotLogger.warn("⛔ SISTEMA DETENIDO POR RISK MANAGER.");
-                return;
+            BotLogger.info("======================================================");
+            BotLogger.info("🎼 DIRECTOR: Iniciando Protocolo de Despegue...");
+
+            // =================================================================
+            // 🛫 PASO 1: PRE-FLIGHT CHECK (AUTORIDAD FINAL)
+            // =================================================================
+            // Validamos Java, Integridad FOK, Monte Carlo y Red.
+            // Si esto falla, PreFlightCheck ejecutará System.exit(1).
+            PreFlightCheck.runSequence(this.connector, this.riskManager);
+
+            BotLogger.info("✅ DIRECTOR: Autorización de Torre recibida. Despegando.");
+
+            // =================================================================
+            // 🚀 PASO 2: ACTIVACIÓN DE MOTORES
+            // =================================================================
+            scanner.startOmniScan(BotConfig.SCAN_DURATION_MIN);
+
+            // Reporte Inicial
+            String auditLabel = BotConfig.getFullEnvironmentStatus();
+            BotLogger.logSystemEvent("MISSION_START", auditLabel);
+            BotLogger.sendTelegram("🏁 MISIÓN INICIADA (" + BotConfig.SCAN_DURATION_MIN + " min)\n" + auditLabel);
+
+            // =================================================================
+            // ⏱️ PASO 3: VUELO DE CRUCERO
+            // =================================================================
+            BotLogger.info("⏱️ CRONÓMETRO EN MARCHA. Supervisando en segundo plano...");
+
+            // Bloqueamos el hilo principal hasta que termine el tiempo o stop() sea llamado
+            boolean finishedOnTime = missionLatch.await(BotConfig.SCAN_DURATION_MIN, TimeUnit.MINUTES);
+
+            if (!finishedOnTime) {
+                BotLogger.warn("⌛ TIEMPO DE MISIÓN CUMPLIDO.");
             }
-
-            if (activeTargets.isEmpty()) return;
-            totalScans.increment();
-            String timestamp = LocalTime.now().format(timeFmt);
-            List<Callable<MarketSnapshot>> tasks = new ArrayList<>();
-
-            for (String pair : activeTargets) {
-                for (ExchangeStrategy strategy : strategies) {
-                    tasks.add(() -> fetchMarketData(strategy, pair));
-                }
-            }
-
-            List<Future<MarketSnapshot>> futures = virtualExecutor.invokeAll(tasks);
-            analyzeAndReport(futures, timestamp);
 
         } catch (InterruptedException e) {
+            BotLogger.warn("🛑 INTERRUPCIÓN MANUAL DETECTADA.");
             Thread.currentThread().interrupt();
         } catch (Exception e) {
-            BotLogger.error("🔥 Error en ciclo de escaneo: " + e.getMessage());
+            BotLogger.error("🔥 FALLO CRÍTICO EN VUELO: " + e.getMessage());
+            // No hacemos throw aquí porque queremos ejecutar el shutdownSequence
+        } finally {
+            // =================================================================
+            // 🛬 PASO 4: ATERRIZAJE SEGURO
+            // =================================================================
+            shutdownSequence();
         }
     }
 
-    record MarketSnapshot(String exchange, String pair, double bid, double ask, double fee) {}
+    public void shutdownSequence() {
+        BotLogger.warn("🔻 DIRECTOR: Iniciando protocolo de apagado...");
 
-    private MarketSnapshot fetchMarketData(ExchangeStrategy strategy, String pair) {
-        try {
-            return new MarketSnapshot(
-                    strategy.getName(), pair,
-                    strategy.fetchBid(pair), strategy.fetchAsk(pair),
-                    strategy.getTradingFee(pair)
-            );
-        } catch (Exception e) {
-            return new MarketSnapshot(strategy.getName(), pair, 0, 0, 0);
+        // Detener Cerebro (Deja de enviar órdenes)
+        if (scanner != null) {
+            scanner.shutdown();
         }
+
+        // Reporte Final
+        double totalPnL = (scanner != null) ? scanner.getTotalPotentialProfit() : 0.0;
+        long totalTrades = (scanner != null) ? scanner.getTradesCount() : 0;
+
+        String endReport = String.format("MISSION_END | PnL: $%.2f | Trades: %d", totalPnL, totalTrades);
+        BotLogger.logSystemEvent("MISSION_END", endReport);
+        BotLogger.sendTelegram("🏁 FIN DE MISIÓN\n" + endReport);
+
+        BotLogger.info("👋 DIRECTOR: JVM lista para salir. Cambio y fuera.");
+        missionLatch.countDown();
     }
 
-    private void analyzeAndReport(List<Future<MarketSnapshot>> futures, String time) {
-        List<MarketSnapshot> snapshots = new ArrayList<>();
-        for (Future<MarketSnapshot> f : futures) {
-            try {
-                MarketSnapshot s = f.get();
-                if (s.bid() > 0 && s.ask() > 0) snapshots.add(s);
-            } catch (Exception ignored) {}
-        }
-
-        for (String targetPair : activeTargets) {
-            analyzeSinglePair(snapshots, targetPair, time);
-        }
-    }
-
-    private void analyzeSinglePair(List<MarketSnapshot> allSnapshots, String pair, String time) {
-        List<MarketSnapshot> pairData = allSnapshots.stream()
-                .filter(s -> s.pair().equals(pair) || s.pair().equals(pair.replace("USDT", "-USDT")))
-                .toList();
-
-        if (pairData.size() < 2) return;
-
-        StringBuilder logBatch = new StringBuilder();
-
-        for (MarketSnapshot source : pairData) {
-            for (MarketSnapshot target : pairData) {
-                if (source.exchange().equals(target.exchange())) continue;
-
-                double buyPrice = source.ask();
-                double sellPrice = target.bid();
-                double buyFeeRate = source.fee();
-                double sellFeeRate = target.fee();
-
-                String asset = pair.replace("USDT", "").replace("-", "");
-                double withdrawQty = feeManager.getWithdrawalFee(source.exchange().toLowerCase(), asset);
-
-                if (withdrawQty < 0) continue;
-
-                ProfitCalculator.AnalysisResult result = profitCalculator.calculateCrossTrade(
-                        capital, buyPrice, sellPrice, buyFeeRate, sellFeeRate, withdrawQty
-                );
-
-                double netProfit = result.netProfit();
-
-                if (netProfit > 0) positiveSpreads.increment();
-                if (netProfit > bestNetProfit) {
-                    bestNetProfit = netProfit;
-                    bestPairLog = String.format("[%s] %s->%s ($%.2f)", pair, source.exchange(), target.exchange(), netProfit);
-                }
-
-                if (netProfit > 0.05) {
-                    logBatch.append(String.format(
-                            "[%s] 💰 %-6s %-7s->%-7s | NETO:$%6.2f | ROI:%.2f%%\n",
-                            time, pair, source.exchange(), target.exchange(), netProfit, result.roiPercent()
-                    ));
-                }
-
-                // 🔥 ZONA DE DISPARO 🔥
-                if (result.isProfitable()) {
-                    if (riskManager.canExecuteTrade()) {
-                        BotLogger.warn("🚀 EJECUTANDO OPORTUNIDAD: " + pair + " (Neto Previsto: $" + netProfit + ")");
-
-                        // 2. Disparamos al Músculo
-                        // CORRECCIÓN: Llamada a void, sin asignación.
-                        executor.executeSpatialArbitrage(
-                                asset, source.exchange(), target.exchange(), capital
-                        );
-
-                        // 3. Reportamos el resultado TEÓRICO al Gobernador (Simulación)
-                        riskManager.reportTradeResult(netProfit);
-
-                    } else {
-                        BotLogger.warn("⛔ OPORTUNIDAD RECHAZADA POR RISK MANAGER.");
-                    }
-                }
-            }
-        }
-        if (logBatch.length() > 0) System.out.print(logBatch);
-    }
-
-    public void stop() {
-        scheduler.shutdown();
-        pairSelector.stop();
-        virtualExecutor.shutdown();
-        BotLogger.info("🏁 REPORTE FINAL: Max Profit Visto: $" + bestNetProfit);
+    public void triggerEmergencyStop() {
+        missionLatch.countDown();
     }
 }

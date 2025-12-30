@@ -39,24 +39,42 @@ public class TriangularExecutor {
 
         if (dryRun) return;
 
-        // --- PASO 1: ENTRY (USDT -> ASSET) ---
+        // -----------------------------------------------------
+        // CORRECCIÓN 1: Definir quantity1 usando BUFFER_ENTRY
+        // -----------------------------------------------------
+        // Calculamos la cantidad a comprar. Usamos el buffer (0.995) para asegurar
+        // que tenemos saldo suficiente cubriendo fees y slippage.
         double quantity1 = (capitalUsdt / limitPrice1) * BUFFER_ENTRY;
 
-        // Fuego 1
-        OrderResult r1 = connector.placeOrder(exchangeName, p1, "BUY", "MARKET", quantity1, 0);
-
+        // --- PASO 1: ENTRY (USDT -> ASSET) ---
+        // CAMBIO: Enviamos "LIMIT_FOK" explícito.
+        // Tu ExchangeConnector debe detectar este string y agregar timeInForce="FOK" en la API.
+        OrderResult r1 = connector.placeOrder(exchangeName, p1, "BUY", "LIMIT_FOK", quantity1, limitPrice1 * 1.005);
+        // -----------------------------------------------------
+        // CORRECCIÓN 2: Usar r1 y definir acquiredAsset
+        // -----------------------------------------------------
+        // Si la orden 1 no se llenó (FOK fallido o parcial no aceptado), abortamos.
+        // Esto soluciona "Variable 'r1' is never used".
         if (!r1.isFilled()) {
-            BotLogger.warn("⚠️ Triangular abortada en P1 (" + exchangeName + ")");
-            return;
+            return; // Salida rápida, no hay nada que vender.
         }
 
+        // Obtenemos la cantidad REAL comprada para el paso 2.
+        // Esto soluciona "Cannot resolve symbol 'acquiredAsset'".
         double acquiredAsset = r1.executedQty();
 
+        // Safety check paranoico (si la API devuelve 0 en qty pero dice filled)
+        if (acquiredAsset <= 0) {
+            // Fallback de emergencia: asumimos lo que calculamos menos un fee estimado del 0.1%
+            acquiredAsset = quantity1 * 0.999;
+        }
+
         // --- PASO 2: BRIDGE (ASSET -> BRIDGE) ---
-        // Fuego 2
+        // Fuego 2: Vendemos lo que acabamos de adquirir
         OrderResult r2 = connector.placeOrder(exchangeName, p2, "SELL", "MARKET", acquiredAsset, 0);
 
         if (!r2.isFilled()) {
+            // Ojo: Aquí pasamos 'acquiredAsset' que ya está definido arriba
             handleEmergencyExit(exchangeName, asset, p1, acquiredAsset);
             return;
         }
@@ -75,7 +93,7 @@ public class TriangularExecutor {
 
         if (r3.isFilled()) {
             double profit = r3.executedValue() - capitalUsdt;
-            // Log asíncrono post-mortem
+            // Log asíncrono post-mortem (fuera de la ruta crítica si usas disruptor/queue)
             BotLogger.logTrade("TRIANGULAR_" + asset + "_" + bridge, "WIN", 0, profit);
         } else {
             // Sweep final de emergencia

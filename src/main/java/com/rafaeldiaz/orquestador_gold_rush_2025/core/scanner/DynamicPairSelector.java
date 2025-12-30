@@ -155,6 +155,9 @@ public class DynamicPairSelector {
     /**
      * 🔬 ANÁLISIS DE CANDIDATO
      */
+    /**
+     * 🔬 ANÁLISIS DE CANDIDATO
+     */
     private OpportunityScore analyzeMarketCandidate(String pair) {
         try {
             String refExchange = BotConfig.ADVISOR_REF_EXCHANGE;
@@ -162,17 +165,20 @@ public class DynamicPairSelector {
             // A. Volatilidad (ATR 1m)
             List<double[]> candles = connector.fetchCandles(refExchange, pair, "1m", 5);
 
-            // ✅ JAVA 21+: Sequenced Collections check
             if (candles == null || candles.isEmpty()) return null;
 
-            // Uso de getLast() en lugar de get(size-1) -> Más limpio y seguro
+            // ✅ CORRECCIÓN: Ajuste de Índices según ExchangeConnector (Size 3: High, Low, Close)
             double[] lastCandle = candles.getLast();
 
-            // Fallback índice de cierre (4=Close standard, 2=High fallback)
-            double lastPrice = lastCandle.length > 4 ? lastCandle[4] : lastCandle[2];
+            // El Close está en el índice 2
+            double lastPrice = lastCandle[2];
 
             double atrSum = 0;
-            for(double[] c : candles) atrSum += (c[2] - c[3]); // High - Low
+            for(double[] c : candles) {
+                // High (0) - Low (1)
+                atrSum += (c[0] - c[1]);
+            }
+
             double atrPercent = ((atrSum/candles.size()) / lastPrice) * 100.0;
 
             if (atrPercent < 0.15) return null; // Dead market check
@@ -181,7 +187,6 @@ public class DynamicPairSelector {
             ExchangeConnector.OrderBook book = connector.fetchOrderBook(refExchange, pair, 10);
             if (book == null || book.bids().isEmpty()) return null;
 
-            // ✅ Sequenced Collections: Acceso al mejor Bid/Ask
             double bestBid = book.bids().getFirst()[0];
             double bestAsk = book.asks().getFirst()[0];
 
@@ -206,10 +211,10 @@ public class DynamicPairSelector {
             return new OpportunityScore(pair, finalScore, atrPercent, spreadPercent);
 
         } catch (Exception e) {
-            return null; // El scope general maneja los nulos
+            // BotLogger.error("Error analizando " + pair + ": " + e.getMessage()); // Descomentar para debug
+            return null;
         }
     }
-
     private void logIntelligenceReport(List<OpportunityScore> top) {
         StringBuilder sb = new StringBuilder("\n📡 RADAR DE OPORTUNIDADES (Para Humano):\n");
         if (top.isEmpty()) {

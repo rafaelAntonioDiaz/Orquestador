@@ -144,4 +144,23 @@ public class FeeManager {
         // Si no hay nada, usa la tabla estática de seguridad
         return WITHDRAW_FALLBACKS.getOrDefault(asset.toUpperCase(), WITHDRAW_FALLBACKS.get("DEFAULT"));
     }
+    // =========================================================================
+    // 🔄 INVALIDACIÓN REACTIVA
+    // =========================================================================
+
+    /**
+     * Fuerza el borrado de la caché de fees para un exchange específico.
+     * Se debe llamar:
+     * 1. Al detectar un cambio de día UTC (00:00).
+     * 2. Después de una operación exitosa (para asegurar datos frescos).
+     * 3. Si el sistema detecta inconsistencias en los cálculos.
+     */
+    public void forceFeeCacheInvalidation(String exchange) {
+        String exKey = exchange.toUpperCase();
+
+        // Removemos todas las entradas que empiecen con el nombre del exchange
+        feeCache.keySet().removeIf(key -> key.startsWith(exKey + "_"));
+
+        BotLogger.info("♻️ Fee Cache invalidado para: " + exchange + " (Datos frescos requeridos)");
+    }
 }

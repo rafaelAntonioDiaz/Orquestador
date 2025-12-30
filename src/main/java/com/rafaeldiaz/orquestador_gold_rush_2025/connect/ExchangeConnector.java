@@ -227,26 +227,29 @@ public class ExchangeConnector {
     }
     public Request buildOrderRequest(String exchange, String pair,
                                      String side, String type, double qty, double price) {
-        // Preparación de datos comunes (Rápido en CPU)
+
+        // 🧹 Preparación de datos comunes (Fast Path)
         String cleanPair = pair.replace("-", "").toUpperCase();
         String sideCap = side.equalsIgnoreCase("BUY") ? "Buy" : "Sell";
-
-        // 🇺🇸 CURA PARA EL VIRUS DE LA COMA (Formateo Seguro)
+        // [OPTIMIZACIÓN] Usamos Locale.US para asegurar el punto decimal
         String qtyStr = String.format(java.util.Locale.US, "%.8f", qty);
+        String priceStr = String.format(java.util.Locale.US, "%.8f", price);
 
-        // =================================================================
-        // 🟠 BYBIT V5 (JSON con TEXT BLOCKS)
-        // =================================================================
-        if (exchange.toLowerCase().contains("bybit")) {
+        // [FOK UPDATE] Detección de intención
+        boolean isFOK = type.equalsIgnoreCase("LIMIT_FOK");
+        // Si es LIMIT_FOK o LIMIT normal, para la API es un "Limit"
+        String apiType = type.toUpperCase().contains("LIMIT") ? "Limit" : "Market";
 
-            String jsonPayload;
+        // 🚀 SWITCH EXPRESSION (Java 21+ Style)
+        return switch (exchange.toLowerCase()) {
 
-            if (type.equalsIgnoreCase("LIMIT")) {
-                String priceStr = String.format(java.util.Locale.US, "%.8f", price);
-
-                // ⚡ PLANTILLA LIMIT (Limpia, sin escapes)
-                // Java 15+ Text Blocks + .formatted()
-                jsonPayload = """
+            // 🟠 CASO 1: BYBIT V5
+            case String s when s.contains("bybit") -> {
+                String jsonPayload;
+                if (apiType.equalsIgnoreCase("Limit")) {
+                    // [FOK UPDATE] Bybit usa timeInForce: "FOK"
+                    String tif = isFOK ? "FOK" : "GTC";
+                    jsonPayload = """
                 {
                     "category": "spot",
                     "symbol": "%s",
@@ -254,13 +257,11 @@ public class ExchangeConnector {
                     "orderType": "Limit",
                     "qty": "%s",
                     "price": "%s",
-                    "timeInForce": "FOK"
+                    "timeInForce": "%s"
                 }
-                """.formatted(cleanPair, sideCap, qtyStr, priceStr);
-
-            } else {
-                // ⚡ PLANTILLA MARKET (Sin precio, sin TIF)
-                jsonPayload = """
+                """.formatted(cleanPair, sideCap, qtyStr, priceStr, tif);
+                } else {
+                    jsonPayload = """
                 {
                     "category": "spot",
                     "symbol": "%s",
@@ -269,53 +270,89 @@ public class ExchangeConnector {
                     "qty": "%s"
                 }
                 """.formatted(cleanPair, sideCap, qtyStr);
+                }
+                yield buildSignedRequest(exchange, "POST", "/v5/order/create", jsonPayload);
             }
 
-            // Minificación (Opcional para ahorrar ancho de banda, pero en V5 no es estricto)
-            // jsonPayload = jsonPayload.replaceAll("\\s+", "");
+            // 🟡 CASO 2: BINANCE & MEXC
+            case "binance", "mexc" -> {
+                String binanceType = apiType.toUpperCase(); // API requiere UPPERCASE (LIMIT, MARKET)
 
-            return buildSignedRequest(exchange, "POST", "/v5/order/create", jsonPayload);
-        }
+                // Template base
+                String queryBase = "symbol=%s&side=%s&type=%s&quantity=%s".formatted(
+                        cleanPair, side.toUpperCase(), binanceType, qtyStr
+                );
+                StringBuilder query = new StringBuilder(queryBase);
 
-        // =================================================================
-        // 🟡 BINANCE / MEXC (Query String con TEMPLATE)
-        // =================================================================
-        if (exchange.equalsIgnoreCase("binance") || exchange.equalsIgnoreCase("mexc")) {
+                if (binanceType.equals("LIMIT")) {
+                    // [FOK UPDATE] Binance/MEXC usan timeInForce en el query param
+                    String tif = isFOK ? "FOK" : "GTC";
+                    query.append("&price=").append(priceStr).append("&timeInForce=").append(tif);
+                }
 
-            // Construcción base usando formatted() para limpieza visual
-            String queryBase = "symbol=%s&side=%s&type=%s&quantity=%s".formatted(
-                    cleanPair,
-                    side.toUpperCase(),
-                    type.toUpperCase(),
-                    qtyStr
-            );
+                long timestamp = java.time.Instant.now().toEpochMilli();
 
-            StringBuilder query = new StringBuilder(queryBase);
+                // Pequeña diferencia interna manejada con if simple
+                if (exchange.equalsIgnoreCase("mexc")) {
+                    query.append("&timestamp=").append(timestamp);
+                } else {
+                    query.append("&timestamp=").append(timestamp).append("&recvWindow=5000");
+                }
 
-            if (type.equalsIgnoreCase("LIMIT")) {
-                String priceStr = String.format(java.util.Locale.US, "%.8f", price);
-                query.append("&price=").append(priceStr).append("&timeInForce=GTC");
+                String signature = hmacSha256(query.toString(), getApiSecret(exchange));
+                String baseUrl = exchange.equalsIgnoreCase("binance") ? BINANCE_URL : MEXC_URL;
+                // Usamos String.format clásico para evitar líos con % en URLs
+                String finalUrl = baseUrl + "/api/v3/order?" + query + "&signature=" + signature;
+
+                yield new Request.Builder()
+                        .url(finalUrl)
+                        .header(exchange.equalsIgnoreCase("mexc") ? "X-MEXC-APIKEY" : "X-MBX-APIKEY", getApiKey(exchange))
+                        .header("Content-Type", "application/x-www-form-urlencoded")
+                        .post(okhttp3.RequestBody.create("", okhttp3.MediaType.parse("application/x-www-form-urlencoded")))
+                        .build();
             }
 
-            long timestamp = java.time.Instant.now().toEpochMilli();
-            query.append("&timestamp=").append(timestamp).append("&recvWindow=5000");
+            // 🟢 CASO 3: KUCOIN
+            case "kucoin" -> {
+                String kPair = pair.contains("-") ? pair : pair.replace("USDT", "-USDT").replace("USDC", "-USDC");
+                String clientOid = java.util.UUID.randomUUID().toString();
+                String jsonPayload;
 
-            // Firma (Crypto-Math)
-            String signature = hmacSha256(query.toString(), getApiSecret(exchange));
+                if (apiType.equalsIgnoreCase("Limit")) {
+                    // [FOK UPDATE] KuCoin usa timeInForce dentro del JSON
+                    String tif = isFOK ? "FOK" : "GTC";
+                    jsonPayload = """
+                {
+                    "clientOid": "%s",
+                    "side": "%s",
+                    "symbol": "%s",
+                    "type": "limit",
+                    "price": "%s",
+                    "size": "%s",
+                    "timeInForce": "%s"
+                }
+                """.formatted(clientOid, side.toLowerCase(), kPair, priceStr, qtyStr, tif);
+                } else {
+                    jsonPayload = """
+                {
+                    "clientOid": "%s",
+                    "side": "%s",
+                    "symbol": "%s",
+                    "type": "market",
+                    "size": "%s"
+                }
+                """.formatted(clientOid, side.toLowerCase(), kPair, qtyStr);
+                }
+                yield buildKucoinRequest("POST", "/api/v1/orders", jsonPayload);
+            }
 
-            String baseUrl = exchange.equalsIgnoreCase("binance") ? BINANCE_URL : MEXC_URL;
-            String finalUrl = "%s/api/v3/order?%s&signature=%s".formatted(baseUrl, query, signature);
-
-            return new Request.Builder()
-                    .url(finalUrl)
-                    .header(exchange.equalsIgnoreCase("mexc") ? "X-MEXC-APIKEY" : "X-MBX-APIKEY", getApiKey(exchange))
-                    .post(okhttp3.RequestBody.create("", okhttp3.MediaType.parse("application/x-www-form-urlencoded")))
-                    .build();
-        }
-
-        return null;
+            // ⚪ DEFAULT
+            default -> {
+                BotLogger.error("❌ Exchange no soportado para órdenes: " + exchange);
+                yield null;
+            }
+        };
     }
-
     public double fetchPrice(String exchange, String pair) {
         String cleanPair = pair.replace("-", "").toUpperCase();
         try {
@@ -960,22 +997,29 @@ public class ExchangeConnector {
         String apiSecret = getApiSecret("kucoin");
         String rawPassphrase = envProvider.get("KUCOIN_PASSPHRASE");
 
-        // 1. FIRMA DE LA PETICIÓN (Endpoint + Body)
+        // 1. FIRMA
         String signature = hmacSha256Base64(timestamp + method + endpoint + body, apiSecret);
-
-        // 2. ENCRIPTACIÓN DE LA PASSPHRASE
-        // KuCoin V2 requiere que la passphrase se firme con el Secret y se pase a Base64
         String encryptedPassphrase = hmacSha256Base64(rawPassphrase, apiSecret);
 
-        return new Request.Builder()
+        // 2. CONSTRUCCIÓN DEL BUILDER
+        Request.Builder builder = new Request.Builder()
                 .url(KUCOIN_URL + endpoint)
                 .header("KC-API-KEY", getApiKey("kucoin"))
                 .header("KC-API-SIGN", signature)
-                .header("KC-API-PASSPHRASE", encryptedPassphrase) // <--- AHORA VA ENCRIPTADA
+                .header("KC-API-PASSPHRASE", encryptedPassphrase)
                 .header("KC-API-TIMESTAMP", String.valueOf(timestamp))
-                .header("KC-API-KEY-VERSION", "2") // Estamos forzando V2
-                .header("Content-Type", "application/json")
-                .get().build();
+                .header("KC-API-KEY-VERSION", "2")
+                .header("Content-Type", "application/json"); // Header explícito siempre ayuda
+
+        // 3. DECISIÓN DE MÉTODO (GET vs POST)
+        if ("POST".equalsIgnoreCase(method)) {
+            // Aquí inyectamos el cuerpo JSON que faltaba
+            builder.post(RequestBody.create(body, MediaType.parse("application/json")));
+        } else {
+            builder.get();
+        }
+
+        return builder.build();
     }
 
     private String hmacSha256(String data, String secret) {
@@ -1074,7 +1118,7 @@ public class ExchangeConnector {
             // Solo registramos latencia si hubo éxito o intento de conexión real.
             // Si falló por timeout, cuenta como latencia alta.
             MetricsService.get().recordLatency(exchangeHost, durationMs);
-
+            recordLatency(exchangeHost, durationMs);
             // Si el modo pesado falló tras todos los reintentos, el catch interno ya lo manejó,
             // pero aquí aseguramos el registro si el flag success sigue en false.
             if (!success && mode == ExecutionMode.HEAVY_DUTY) {
