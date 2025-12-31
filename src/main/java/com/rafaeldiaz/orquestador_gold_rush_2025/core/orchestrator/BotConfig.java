@@ -54,7 +54,6 @@ public class BotConfig {
     // ==========================================
     // 4. ARQUITECTURA DE MERCADO
     // ==========================================
-    public static final List<String> ACTIVE_EXCHANGES = parseList(dotenv.get("ACTIVE_EXCHANGES", "binance,bybit,mexc"));
     public static final List<String> BRIDGE_ASSETS = parseList(dotenv.get("BRIDGE_ASSETS", "BTC,ETH,BNB,USDC"));
     public static final List<String> HUNTING_GROUNDS_SEED = parseList(dotenv.get("HUNTING_GROUNDS_SEED", "SOL,XRP,DOGE,PEPE"));
 
@@ -74,7 +73,17 @@ public class BotConfig {
     // ==========================================
     // 6. AUTONOMÍA (CFO)
     // ==========================================
-    public static final List<String> SPATIAL_ACCOUNTS = parseList(dotenv.get("SPATIAL_ACCOUNTS", "binance,bybit_sub1"));
+    public static final List<String> ACTIVE_EXCHANGES = List.of(
+            "binance",
+            "mexc",
+            "kucoin",
+            "okx",
+            "bybit_sub1",
+            "bybit_sub2",
+            "bybit_sub3"
+    );
+    public static final List<String> SPATIAL_ACCOUNTS = ACTIVE_EXCHANGES;
+
     public static final List<String> TRIANGULAR_ACCOUNTS = parseList(dotenv.get("TRIANGULAR_ACCOUNTS", "bybit_sub2,bybit_sub3"));
 
     public static final boolean AUTO_DISCOVERY = Boolean.parseBoolean(dotenv.get("AUTO_DISCOVERY", "true").trim());
@@ -170,4 +179,6 @@ public class BotConfig {
                 .append("; SIZE_PCT=").append(TRADE_SIZE_PERCENT)
                 .toString();
     }
+
+
 }

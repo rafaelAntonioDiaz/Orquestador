@@ -345,6 +345,43 @@ public class ExchangeConnector {
                 }
                 yield buildKucoinRequest("POST", "/api/v1/orders", jsonPayload);
             }
+            // 🔵 CASO 4: OKX (¡EL GIGANTE!)
+            case "okx" -> {
+                // 1. Obtener símbolo con guión (BTC-USDT) vía Registry
+                String symbol = com.rafaeldiaz.orquestador_gold_rush_2025.core.platform.ExchangeRegistry
+                        .toExchangeSymbol("okx", pair.replace("USDT", ""), "USDT");
+
+                // 2. Normalizar Side
+                String sideOkx = side.toLowerCase(); // "buy" o "sell"
+
+                // 3. Normalizar Tipo (OKX soporta 'limit', 'market', 'fok', 'ioc')
+                String typeOkx = "limit";
+                if (type.toUpperCase().contains("MARKET")) typeOkx = "market";
+                else if (type.toUpperCase().contains("FOK")) typeOkx = "fok"; // Fill-or-Kill nativo
+
+                // 4. Construir JSON
+                // OKX Spot requiere tdMode: "cash"
+                String jsonPayload = """
+                {
+                    "instId": "%s",
+                    "tdMode": "cash",
+                    "side": "%s",
+                    "ordType": "%s",
+                    "sz": "%s"
+                    %s
+                }
+                """.formatted(
+                        symbol,
+                        sideOkx,
+                        typeOkx,
+                        String.format(java.util.Locale.US, "%.8f", qty), // Cantidad (Base Asset)
+                        // Inyectamos precio si NO es Market
+                        !typeOkx.equals("market") ? ", \"px\": \"" + String.format(java.util.Locale.US, "%.8f", price) + "\"" : ""
+                );
+
+                // 5. Retornar Request Firmado
+                yield buildOkxRequest("POST", "/api/v5/trade/order", jsonPayload);
+            }
 
             // ⚪ DEFAULT
             default -> {
@@ -354,25 +391,62 @@ public class ExchangeConnector {
         };
     }
     public double fetchPrice(String exchange, String pair) {
-        String cleanPair = pair.replace("-", "").toUpperCase();
+        // 1. Normalización de Símbolo
+        String symbol;
         try {
-            String url = switch (exchange) {
-                case "binance" -> BINANCE_URL + "/api/v3/ticker/price?symbol=" + cleanPair;
-                case "mexc" -> MEXC_URL + "/api/v3/ticker/price?symbol=" + cleanPair;
-                case "kucoin" -> KUCOIN_URL + "/api/v1/market/orderbook/level1?symbol=" + (pair.contains("-") ? pair : pair.replace("USDT", "-USDT"));
-                default -> BYBIT_URL + "/v5/market/tickers?category=spot&symbol=" + cleanPair;
+            symbol = com.rafaeldiaz.orquestador_gold_rush_2025.core.platform.ExchangeRegistry
+                    .toExchangeSymbol(exchange, pair.replace("USDT", ""), "USDT");
+        } catch (Exception e) {
+            BotLogger.warn("⚠️ Driver no encontrado para " + exchange + ". Usando default.");
+            symbol = pair;
+        }
+
+        try {
+            String url = switch (exchange.toLowerCase()) {
+                case "binance" -> BINANCE_URL + "/api/v3/ticker/price?symbol=" + symbol;
+                case "mexc" -> MEXC_URL + "/api/v3/ticker/price?symbol=" + symbol;
+                case "kucoin" -> KUCOIN_URL + "/api/v1/market/orderbook/level1?symbol=" + symbol;
+                case "okx" -> "https://www.okx.com/api/v5/market/ticker?instId=" + symbol;
+                default -> BYBIT_URL + "/v5/market/tickers?category=spot&symbol=" + symbol;
             };
-            Request request = new Request.Builder().url(url).get().build();
-            try (Response response = executeWithRetry(request)) {
-                if (!response.isSuccessful()) return 0.0;
-                JsonNode root = mapper.readTree(response.body().string());
+
+            // 🛡️ CORRECCIÓN 1: Agregar User-Agent para evitar bloqueos 403 en OKX
+            Request.Builder builder = new Request.Builder()
+                    .url(url)
+                    .header("User-Agent", "GoldRushBot/1.0") // Identidad para pasar firewall
+                    .get();
+
+            try (Response response = executeWithRetry(builder.build())) { // O use executeRequest(..., FAST_LANE) si no tiene executeWithRetry
+                if (!response.isSuccessful()) {
+                    // 🛡️ CORRECCIÓN 2: Loguear si el exchange nos rechaza
+                    BotLogger.error("❌ HTTP Error fetching price " + exchange + ": " + response.code());
+                    return 0.0;
+                }
+
+                String body = response.body().string();
+                JsonNode root = mapper.readTree(body);
+
+                if (exchange.equalsIgnoreCase("okx")) {
+                    // OKX Parsing
+                    if (root.path("code").asText().equals("0")) {
+                        return Double.parseDouble(root.path("data").get(0).path("last").asText());
+                    } else {
+                        BotLogger.error("❌ OKX API Error: " + root.path("msg").asText());
+                        return 0.0;
+                    }
+                }
+
+                // ... Resto de parsings (Bybit, Binance, Kucoin)...
                 if (exchange.startsWith("bybit")) return Double.parseDouble(root.get("result").get("list").get(0).get("lastPrice").asText());
-                if (exchange.equals("kucoin")) return root.get("data").get("price").asDouble();
+                if (exchange.equalsIgnoreCase("kucoin")) return root.get("data").get("price").asDouble();
                 return root.get("price").asDouble();
             }
-        } catch (Exception e) { return 0.0; }
-    }
-    // =========================================================================
+        } catch (Exception e) {
+            // 🛡️ CORRECCIÓN 3: Imprimir la excepción real para debug
+            BotLogger.error("💥 Excepción en fetchPrice (" + exchange + "): " + e.getMessage());
+            return 0.0;
+        }
+    }    // =========================================================================
     // 📖 2.5 VISIÓN DE AMPLIO ESPECTRO (ORDER BOOK)
     // =========================================================================
     /**
@@ -394,6 +468,9 @@ public class ExchangeConnector {
             } else if (exchange.equalsIgnoreCase("kucoin")) {
                 String kPair = pair.contains("-") ? pair : pair.replace("USDT", "-USDT");
                 url = KUCOIN_URL + "/api/v1/market/orderbook/level2_20?symbol=" + kPair;
+            } else if (exchange.equals("okx")) {
+                // sz = depth (max 400 en OKX)
+                url = "https://www.okx.com/api/v5/market/books?instId=" + cleanPair + "&sz=" + depth;
             }
 
             Request request = new Request.Builder().url(url).get().build();
@@ -412,6 +489,12 @@ public class ExchangeConnector {
                 } else if (exchange.equalsIgnoreCase("kucoin")) {
                     bNode = root.get("data").get("bids");
                     aNode = root.get("data").get("asks");
+                } else if (exchange.equals("okx")) {
+                    if (root.path("code").asText().equals("0")) {
+                        JsonNode data = root.path("data").get(0);
+                        bNode = data.get("bids");
+                        aNode = data.get("asks");
+                    }
                 }
 
                 if (bNode != null) for (JsonNode n : bNode) bids.add(new double[]{n.get(0).asDouble(), n.get(1).asDouble()});
@@ -508,6 +591,15 @@ public class ExchangeConnector {
                     if (root.has("orderId")) orderId = root.get("orderId").asText();
                 } else if (exchange.equalsIgnoreCase("kucoin")) {
                     if (root.get("code").asText().equals("200000")) orderId = root.get("data").get("orderId").asText();
+                } else if (exchange.equalsIgnoreCase("okx")) { // <--- 🔴 NUEVO BLOQUE OKX
+                    // OKX Success Code = "0"
+                    if (root.path("code").asText().equals("0")) {
+                        // El ID viene en un array data[]
+                        orderId = root.path("data").get(0).path("ordId").asText();
+                    } else {
+                        BotLogger.error("❌ RECHAZO API OKX: " + root.path("msg").asText());
+                        return new com.rafaeldiaz.orquestador_gold_rush_2025.model.OrderResult("ERROR", "FAILED", 0, 0, 0, 0, 0, "NONE");
+                    }
                 }
             }
 
@@ -532,17 +624,19 @@ public class ExchangeConnector {
             return 0.0;
         }
     }
-
     // 🛡️ FETCH BALANCES (HEAVY DUTY implícito en llamadas internas)
     public Map<String, Double> fetchBalances(String exchangeName) {
         return switch (exchangeName.toLowerCase()) {
             case "binance" -> fetchBinanceBalances();
             case "mexc"    -> fetchMexcBalances();
             case "kucoin"  -> fetchKucoinBalances();
+            case "okx"     -> fetchOkxBalances(); // <--- ¡NUEVO!
             case String s when s.contains("bybit") -> fetchBybitBalances(s);
             default -> new HashMap<>();
         };
     }
+
+
 
     // =========================================================================
     // 🔌 IMPLEMENTACIONES PRIVADAS DE BALANCES
@@ -621,7 +715,41 @@ public class ExchangeConnector {
         } catch (Exception e) { BotLogger.error("⚠️ Kucoin Balance Error: " + e.getMessage()); }
         return balances;
     }
-    /**
+
+    private Map<String, Double> fetchOkxBalances() {
+        Map<String, Double> balances = new HashMap<>();
+        try {
+            Request request = buildOkxRequest("GET", "/api/v5/account/balance?ccy=", "");
+
+            // 🔍 DEBUG MODE: No usamos executeWithRetry para ver el error crudo a la primera
+            try (Response response = client.newCall(request).execute()) {
+                String body = response.body().string();
+
+                if (!response.isSuccessful()) {
+                    // 🚨 AQUÍ ESTÁ LA VERDAD: Imprimimos el error exacto
+                    BotLogger.error("❌ OKX REJECTED (HTTP " + response.code() + "): " + body);
+                    return balances;
+                }
+
+                JsonNode root = mapper.readTree(body);
+                if (root.path("code").asText().equals("0")) {
+                    JsonNode details = root.path("data").get(0).path("details");
+                    for (JsonNode assetNode : details) {
+                        double avail = assetNode.path("availBal").asDouble(0);
+                        if (avail > 0) {
+                            balances.put(assetNode.path("ccy").asText(), avail);
+                        }
+                    }
+                } else {
+                    // Error de lógica de negocio de OKX
+                    BotLogger.error("❌ OKX LOGIC ERROR: " + root.path("msg").asText());
+                }
+            }
+        } catch (Exception e) {
+            BotLogger.error("💥 OKX EXCEPTION: " + e.getMessage());
+        }
+        return balances;
+    }    /**
      * Calcula el precio promedio real simulando una compra/venta contra el libro.
      * @param book El libro de órdenes descargado.
      * @param side "BUY" (come del Ask) o "SELL" (come del Bid).
@@ -1022,6 +1150,42 @@ public class ExchangeConnector {
         return builder.build();
     }
 
+    private Request buildOkxRequest(String method, String endpoint, String body) {
+        String apiKey = getApiKey("okx");
+        String secretKey = getApiSecret("okx");
+        String passphrase = envProvider.get("OKX_PASSPHRASE");
+
+        if (apiKey == null || secretKey == null || passphrase == null) {
+            BotLogger.error("🔑 OKX CREDENTIALS MISSING");
+            return null;
+        }
+
+        String timestamp = java.time.Instant.now()
+                .truncatedTo(java.time.temporal.ChronoUnit.MILLIS)
+                .toString();
+        String preHash = timestamp + method.toUpperCase() + endpoint + body;
+        String signature = hmacSha256Base64(preHash, secretKey);
+
+        String fullUrl = "https://www.okx.com" + endpoint;
+
+        Request.Builder builder = new Request.Builder()
+                .url(fullUrl)
+                .header("OK-ACCESS-KEY", apiKey)
+                .header("OK-ACCESS-SIGN", signature)
+                .header("OK-ACCESS-TIMESTAMP", timestamp)
+                .header("OK-ACCESS-PASSPHRASE", passphrase)
+                .header("Content-Type", "application/json")
+                // 🛡️ ESCUDO ANTI-FIREWALL:
+                .header("User-Agent", "GoldRushBot/1.0 (Java 25; BareMetal)");
+
+        if ("POST".equalsIgnoreCase(method)) {
+            builder.post(RequestBody.create(body, MediaType.parse("application/json")));
+        } else {
+            builder.get();
+        }
+
+        return builder.build();
+    }
     private String hmacSha256(String data, String secret) {
         try {
             Mac mac = Mac.getInstance("HmacSHA256");

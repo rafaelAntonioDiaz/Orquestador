@@ -69,23 +69,17 @@ public class BotLogger {
                 public String format(LogRecord lr) {
                     String msg = lr.getMessage();
 
-                    // Si es parte de una tabla, imprimir CRUDO (sin fecha ni nivel)
-                    // Usamos .contains para ignorar si empieza con códigos de color
+                    // Si es parte de una tabla, imprimir CRUDO
                     if (isTableBorder(msg)) {
                         return msg + "\n";
                     }
 
-                    // Coloreamos el nivel (INFO=Verde, WARN=Amarillo, ERROR=Rojo)
+                    // Coloreamos el nivel
                     String color = GREEN;
                     if (lr.getLevel() == Level.WARNING) color = YELLOW;
                     if (lr.getLevel() == Level.SEVERE) color = RED;
-
-                    // CORRECCIÓN CRÍTICA DE ÍNDICES:
-                    // %1$s = Color
-                    // %2$tT = Fecha (Time)
-                    // %3$s = Reset
-                    // %4$s = Mensaje
-                    return String.format("%1$s[%2$tT]%3$s %4$s %n",
+                    // ✅ AJUSTE VISUAL:
+                    return String.format("%1$s[%2$tT] %4$s%3$s%n",
                             color, new java.util.Date(lr.getMillis()), RESET, msg);
                 }
             });
