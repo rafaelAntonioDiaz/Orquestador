@@ -21,7 +21,8 @@ public class PortfolioHealthManager {
 
     // 🧠 MEMORIA DE CORTO PLAZO
     private final Map<String, HealthDirective> directiveCache = new ConcurrentHashMap<>();
-
+    // 🗺️ MAPA DE UBICACIÓN : Recuerda en qué exchange vive cada activo
+    private final Map<String, Set<String>> assetLocations = new ConcurrentHashMap<>();
     // ⚙️ MOTORES
     private final ScheduledExecutorService heartbeatScheduler = Executors.newSingleThreadScheduledExecutor();
     private final ExecutorService scatterExecutor = Executors.newVirtualThreadPerTaskExecutor();
@@ -128,37 +129,50 @@ public class PortfolioHealthManager {
     public List<String> discoverTradableAssets() {
         if (!BotConfig.AUTO_DISCOVERY) return BotConfig.FIXED_ASSETS;
 
-        // BotLogger.info("🕵️ CFO: Escaneando Universo (Paralelo)..."); // Verbose reducido
         try {
-            List<Callable<Set<String>>> tasks = new ArrayList<>();
+            // Modificamos la tarea para que nos diga QUÉ exchange respondió QUÉ activos
+            List<Callable<Map.Entry<String, Set<String>>>> tasks = new ArrayList<>();
             for (String ex : spatialAccounts) {
-                tasks.add(() -> filterDust(ex, connector.fetchBalances(ex)));
+                // Empaquetamos el nombre del exchange junto con sus activos
+                tasks.add(() -> Map.entry(ex, filterDust(ex, connector.fetchBalances(ex))));
             }
 
-            List<Future<Set<String>>> futures = scatterExecutor.invokeAll(tasks, 5000, TimeUnit.MILLISECONDS);
+            List<Future<Map.Entry<String, Set<String>>>> futures = scatterExecutor.invokeAll(tasks, 5000, TimeUnit.MILLISECONDS);
 
-            // Mapa de Frecuencia: Activo -> Cuántos exchanges lo tienen
+            // 1. Limpieza del mapa de ubicaciones (Empezamos fresco)
+            Map<String, Set<String>> newLocations = new ConcurrentHashMap<>();
+
+            // Mapa de Frecuencia para Quórum
             Map<String, Integer> frequencyMap = new HashMap<>();
             int successfulResponses = 0;
 
-            for (Future<Set<String>> f : futures) {
+            for (Future<Map.Entry<String, Set<String>>> f : futures) {
                 if (f.state() == Future.State.SUCCESS) {
                     try {
-                        Set<String> assets = f.get();
+                        Map.Entry<String, Set<String>> result = f.get();
+                        String exchange = result.getKey();
+                        Set<String> assets = result.getValue();
+
                         if (assets != null && !assets.isEmpty()) {
                             successfulResponses++;
                             for (String asset : assets) {
                                 frequencyMap.merge(asset, 1, Integer::sum);
+
+                                // 📍 GEOLOCALIZACIÓN: Guardamos dónde vive cada activo
+                                newLocations.computeIfAbsent(asset, k -> ConcurrentHashMap.newKeySet()).add(exchange);
                             }
                         }
                     } catch (Exception ignored) {}
                 }
             }
 
-            // Si no hay al menos 2 exchanges respondiendo, no podemos arbitrar
+            // 2. Actualización Atómica del Mapa Global
+            this.assetLocations.clear();
+            this.assetLocations.putAll(newLocations);
+
             if (successfulResponses < 2) return BotConfig.FIXED_ASSETS;
 
-            // FILTRO DE QUÓRUM: El activo debe existir en al menos 2 exchanges
+            // 3. Filtrado por Quórum (>= 2 exchanges)
             List<String> commonAssets = new ArrayList<>();
             for (Map.Entry<String, Integer> entry : frequencyMap.entrySet()) {
                 if (entry.getValue() >= 2 && !entry.getKey().equals("USDT")) {
@@ -166,15 +180,13 @@ public class PortfolioHealthManager {
                 }
             }
 
-            // Intersección con HUNTING_GROUNDS (Configuración .env)
-            // Esto asegura que solo operemos lo que el usuario quiere Y tenemos en inventario.
             if (!BotConfig.HUNTING_GROUNDS_SEED.isEmpty()) {
                 commonAssets.retainAll(BotConfig.HUNTING_GROUNDS_SEED);
             }
 
             if (!commonAssets.isEmpty()) {
-                BotLogger.info("✅ CFO: Activos operables (Quórum >= 2): " + commonAssets);
-                // Pre-calentamiento
+                // Solo logueamos si hubo cambios o es relevante, para no ensuciar
+                // BotLogger.info("✅ CFO: Activos operables actualizados: " + commonAssets);
                 scatterExecutor.submit(() -> updateDirectivesBatch(commonAssets));
             }
 
@@ -184,6 +196,12 @@ public class PortfolioHealthManager {
             BotLogger.error("❌ Error Discovery: " + e.getMessage());
             return BotConfig.FIXED_ASSETS;
         }
+    }    /**
+     * 🔍 CONSULTA QUIRÚRGICA: ¿En qué exchanges tengo este activo?
+     * Retorna vacío si no hay saldo (así la estrategia sabe no ejecutar).
+     */
+    public Set<String> getValidExchangesForAsset(String asset) {
+        return assetLocations.getOrDefault(asset, Collections.emptySet());
     }
 
     private Set<String> filterDust(String exchange, Map<String, Double> balances) {

@@ -105,8 +105,9 @@ public class RiskManager {
     private void validateRiskParameters() {
         // A. Disyuntor Diario
         double dailyLossRatio = -dailyPnL / initialDailyCapital;
-        // USO DE BOTCONFIG
-        if (dailyPnL < 0 && dailyLossRatio >= BotConfig.RISK_MAX_DAILY_LOSS) {
+
+        // CAMBIO: Usamos BotConfig.getRiskMaxDailyLoss() en vez de la variable directa
+        if (dailyPnL < 0 && dailyLossRatio >= BotConfig.getRiskMaxDailyLoss()) {
             status.set(SystemStatus.HALTED_DAILY_LIMIT);
             String msg = String.format("🛑 DISYUNTOR DIARIO ACTIVADO. Pérdida: %.2f%%.", dailyLossRatio * 100);
             BotLogger.error(msg);
@@ -116,25 +117,26 @@ public class RiskManager {
 
         // B. Disyuntor Drawdown
         double currentDrawdown = (peakCapital - currentCapital) / peakCapital;
-        // USO DE BOTCONFIG
-        if (currentDrawdown >= BotConfig.RISK_MAX_DRAWDOWN) {
+
+        // CAMBIO: Usamos getter
+        if (currentDrawdown >= BotConfig.getRiskMaxDrawdown()) {
             status.set(SystemStatus.HALTED_DRAWDOWN);
             BotLogger.error(String.format("💀 CRITICAL DRAWDOWN (%.2f%%).", currentDrawdown * 100));
-            // coordinator.forceGlobalLockdown("MAX_DRAWDOWN");
+            // coordinator.forceGlobalLockdown("MAX_DRAWDOWN"); // Opcional según tu lógica
             return;
         }
 
-        // C. Disyuntor de Racha (Streak Breaker)
-        // USO DE BOTCONFIG
-        if (consecutiveLosses >= BotConfig.RISK_MAX_CONSECUTIVE_LOSSES) {
+        // C. Disyuntor de Racha
+        // CAMBIO: Usamos getter
+        if (consecutiveLosses >= BotConfig.getRiskMaxConsecutiveLosses()) {
             status.set(SystemStatus.PAUSED_DEVIATION);
-            this.pauseUntilTimestamp = System.currentTimeMillis() + BotConfig.RISK_STREAK_PAUSE_MS;
+            // CAMBIO: Usamos getter
+            this.pauseUntilTimestamp = System.currentTimeMillis() + BotConfig.getRiskStreakPauseMs();
 
             BotLogger.warn("⚠️ RACHA DE PÉRDIDAS (>limit). Pausando sistema por enfriamiento.");
             BotLogger.warn("   -> Reactivación programada: " + Instant.ofEpochMilli(pauseUntilTimestamp));
         }
     }
-
     private void saveFinancialState() {
         try {
             ObjectNode node = mapper.createObjectNode();
@@ -218,7 +220,7 @@ public class RiskManager {
         BotLogger.info(String.format("🎲 Monte Carlo: Prob. Ruina (20%% drawdown) = %.2f%%", ruinProbability * 100));
 
         // USO DE BOTCONFIG
-        if (ruinProbability > BotConfig.RISK_MC_RUIN_THRESHOLD) {
+        if (ruinProbability > BotConfig.getRiskMcRuinThreshold()) {
             BotLogger.error("🚨 MONTE CARLO ALERT: Riesgo estadístico inaceptable. Bloqueando.");
             status.set(SystemStatus.HALTED_DRAWDOWN);
             return false;

@@ -64,9 +64,8 @@ public class ExchangeConnector {
         this.mapper = new ObjectMapper();
         Dotenv dotenvInstance = Dotenv.load();
 
-        // Log de IP (Sin cambios)
         String currentIp = com.rafaeldiaz.orquestador_gold_rush_2025.utils.ExternalIpFetcher.getMyPublicIp();
-        BotLogger.info("🌐 IP PÚBLICA DETECTADA: " + currentIp + " (Asegúrate de que esta IP esté en Bybit)");
+        BotLogger.info("🌐 IP PÚBLICA DETECTADA: " + currentIp + " (Asegúrate de que esta IP esté en las plataformas)");
 
         this.envProvider = dotenvInstance::get;
     }
@@ -95,7 +94,8 @@ public class ExchangeConnector {
     // =========================================================================
     // 🕵️ VERIFICACIÓN DE ÓRDENES (POLLING)
     // =========================================================================
-    private com.rafaeldiaz.orquestador_gold_rush_2025.model.OrderResult fetchOrderResult(String exchange, String orderId, String pair) {
+    private com.rafaeldiaz.orquestador_gold_rush_2025.model.OrderResult fetchOrderResult(
+            String exchange, String orderId, String pair) {
         // Configuración de Polling
         int maxRetries = 20;
         long waitTime = 10;
@@ -244,10 +244,27 @@ public class ExchangeConnector {
         return switch (exchange.toLowerCase()) {
 
             // 🟠 CASO 1: BYBIT V5
+// 🟠 CASO 1: BYBIT V5 (CORREGIDO: PRECISIÓN DINÁMICA)
             case String s when s.contains("bybit") -> {
+
+                // 1. Obtener reglas de precisión del activo (StepSize)
+                double stepSize = getStepSize(exchange, pair);
+
+                // 2. Calcular cuántos decimales permite el exchange
+                int decimals = 0;
+                if (stepSize < 1) {
+                    // Matemáticas: log10(0.01) = -2 -> 2 decimales
+                    decimals = (int) -Math.log10(stepSize);
+                }
+                // Seguridad: Clamp entre 0 y 8 decimales
+                decimals = Math.max(0, Math.min(decimals, 8));
+
+                // 3. Formatear la cantidad exacta
+                String qtyFormat = "%." + decimals + "f";
+                String dynamicQtyStr = String.format(java.util.Locale.US, qtyFormat, qty);
+
                 String jsonPayload;
                 if (apiType.equalsIgnoreCase("Limit")) {
-                    // [FOK UPDATE] Bybit usa timeInForce: "FOK"
                     String tif = isFOK ? "FOK" : "GTC";
                     jsonPayload = """
                 {
@@ -255,11 +272,11 @@ public class ExchangeConnector {
                     "symbol": "%s",
                     "side": "%s",
                     "orderType": "Limit",
-                    "qty": "%s",
+                    "qty": "%s", 
                     "price": "%s",
                     "timeInForce": "%s"
                 }
-                """.formatted(cleanPair, sideCap, qtyStr, priceStr, tif);
+                """.formatted(cleanPair, sideCap, dynamicQtyStr, priceStr, tif); // Usamos dynamicQtyStr
                 } else {
                     jsonPayload = """
                 {
@@ -269,11 +286,10 @@ public class ExchangeConnector {
                     "orderType": "Market",
                     "qty": "%s"
                 }
-                """.formatted(cleanPair, sideCap, qtyStr);
+                """.formatted(cleanPair, sideCap, dynamicQtyStr); // Usamos dynamicQtyStr
                 }
                 yield buildSignedRequest(exchange, "POST", "/v5/order/create", jsonPayload);
             }
-
             // 🟡 CASO 2: BINANCE & MEXC
             case "binance", "mexc" -> {
                 String binanceType = apiType.toUpperCase(); // API requiere UPPERCASE (LIMIT, MARKET)
@@ -348,8 +364,12 @@ public class ExchangeConnector {
             // 🔵 CASO 4: OKX (¡EL GIGANTE!)
             case "okx" -> {
                 // 1. Obtener símbolo con guión (BTC-USDT) vía Registry
-                String symbol = com.rafaeldiaz.orquestador_gold_rush_2025.core.platform.ExchangeRegistry
-                        .toExchangeSymbol("okx", pair.replace("USDT", ""), "USDT");
+                // AHORA (Línea corregida)
+// Eliminamos guiones antes de quitar USDT para evitar residuos como "ETH-"
+                String symbol = com.rafaeldiaz.orquestador_gold_rush_2025.
+                        core.platform.ExchangeRegistry
+                        .toExchangeSymbol("okx", pair.replace(
+                                "-", "").replace("USDT", ""), "USDT");
 
                 // 2. Normalizar Side
                 String sideOkx = side.toLowerCase(); // "buy" o "sell"

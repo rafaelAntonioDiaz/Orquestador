@@ -39,7 +39,8 @@ public class DeepMarketScanner implements MarketListener {
     private final ExecutionCoordinator coordinator;
     private final CachingMarketDataProvider dataProvider; // Tipo concreto para acceder a métricas extra
     private final ProfitEstimator profitEstimator;
-
+    private final com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.FeeManager feeManager;
+    private final PortfolioHealthManager cfo; // <--- AGREGAR ESTA LÍNEA
     // Inteligencia
     private final DynamicPairSelector pairSelector;
     private final GlobalBalanceReporter balanceReporter;
@@ -70,19 +71,22 @@ public class DeepMarketScanner implements MarketListener {
         this.dataProvider = new CachingMarketDataProvider(connector);
 
         // 2. Servicios Auxiliares
-        FeeManager feeManager = new FeeManager(connector);
-        PortfolioHealthManager cfo = new PortfolioHealthManager(connector);
+        this.feeManager = new com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.FeeManager(connector);
+        this.cfo = new PortfolioHealthManager(connector); // <--- CORREGIDO: Asignamos al campo 'this.cfo'
         this.balanceReporter = new GlobalBalanceReporter(connector);
 
         // 3. Cerebro (MarketListener: this)
-        this.pairSelector = new DynamicPairSelector(connector, this, feeManager, cfo);
+        // Nota: Pasamos 'this.cfo'
+        this.pairSelector = new DynamicPairSelector(connector, this, this.feeManager, this.cfo);
 
         // 4. Estimador Financiero
-        this.profitEstimator = new StandardProfitEstimator(feeManager, BotConfig.TEST_CAPITALS);
+        this.profitEstimator = new StandardProfitEstimator(this.feeManager, BotConfig.TEST_CAPITALS);
 
         // 5. Estrategias
-        if (BotConfig.isSpatialStrategy()) strategies.add(new SpatialArbitrageStrategy(BotConfig.MIN_SCAN_SPREAD));
-        strategies.add(new TriangularArbitrageStrategy(BotConfig.BRIDGE_ASSETS, BotConfig.MIN_SCAN_SPREAD));
+        if (BotConfig.isSpatialStrategy()) {
+            // AHORA SÍ FUNCIONA: 'this.cfo' existe y es accesible
+            strategies.add(new SpatialArbitrageStrategy(BotConfig.MIN_SCAN_SPREAD, this.cfo));
+        }
 
         // 6. Ejecutores
         RiskManager riskPolice = new RiskManager(BotConfig.SEED_CAPITAL, coordinator);
@@ -116,11 +120,11 @@ public class DeepMarketScanner implements MarketListener {
 
     private void scanCycle() {
         // FASE 1: Fetch Global
-        Map<String, Map<String, Double>> prices = dataProvider.fetchGlobalPrices(BotConfig.ACTIVE_EXCHANGES);
+        Map<String, Map<String, Double>> prices = dataProvider.fetchGlobalPrices(BotConfig.getActiveExchanges());
         if (prices.isEmpty()) return;
 
         // FASE 1.5: Prefetch (Con TrafficController interno en Provider)
-        dataProvider.prefetchOrderBooks(huntingGrounds, BotConfig.ACTIVE_EXCHANGES).join();
+        dataProvider.prefetchOrderBooks(huntingGrounds, BotConfig.getActiveExchanges()).join();
 
         // FASE 2: Pipeline de Estrategias
         try (var scope = Executors.newVirtualThreadPerTaskExecutor()) {
@@ -204,7 +208,7 @@ public class DeepMarketScanner implements MarketListener {
     // --- Utilidades v3.1 Preservadas ---
 
     private void refreshBalances() {
-        Map<String, Map<String, Double>> b = dataProvider.fetchAllBalances(BotConfig.ACTIVE_EXCHANGES);
+        Map<String, Map<String, Double>> b = dataProvider.fetchAllBalances(BotConfig.getActiveExchanges());
         if (!b.isEmpty()) {
             this.currentSnapshot = new BalanceSnapshot(b, System.currentTimeMillis());
         }
@@ -234,8 +238,28 @@ public class DeepMarketScanner implements MarketListener {
                 time, opp.asset(), route, "VAR", opp.grossSpreadPct()*100, 0.0, opp.expectedProfit()));
     }
 
-    private void sendTelegramReport() { BotLogger.info("Telegram Report: Cache Hits=" + dataProvider.getCacheHits()); }
+    private void sendTelegramReport() {
+        // 1. Recopilar métricas
+        long hits = dataProvider.getCacheHits();
+        long trades = tradesCount.get();
+        double pnl = totalPotentialProfit.sum();
+        String time = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm"));
 
+        // 2. Construir mensaje bonito
+        String report = """
+                📊 **REPORTE DE ESTADO** (%s)
+                
+                💰 **PnL Estimado:** $%.2f
+                🔫 **Trades Detectados:** %d
+                ⚡ **Cache Hits:** %d
+                
+                🛡️ *Sistema Operativo y Vigilando...*
+                """.formatted(time, pnl, trades, hits);
+
+        // 3. Loguear en consola Y ENVIAR a Telegram
+        BotLogger.info("📨 Enviando reporte periódico a Telegram...");
+        BotLogger.sendTelegram(report);
+    }
     public void setDryRun(boolean dryRun) {
         this.dryRun = dryRun;
         if (crossExecutor != null) crossExecutor.setDryRun(dryRun);

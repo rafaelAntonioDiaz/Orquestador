@@ -59,3 +59,16 @@ test {
 application {
     mainClass.set("com.rafaeldiaz.orquestador_gold_rush_2025")  // Tu paquete real
 }
+
+jar {
+    manifest {
+        // Le decimos a Java exactamente dónde arrancar
+        attributes 'Main-Class': 'com.rafaeldiaz.orquestador_gold_rush_2025.core.main.Main'
+    }
+    // Esto mete todas las librerías (OkHttp, Jackson, etc.) DENTRO del JAR
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    // Evita conflictos de archivos duplicados
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}

@@ -180,5 +180,28 @@ public class BotConfig {
                 .toString();
     }
 
+    /** ---      Eliminar en produccion y reemplazar por los parámetros del .env
+     * Son meétodos para poder probar las clases aislándolas del.env
+     **/
 
+    // Puente para Tests
+    public static List<String> getActiveExchanges() {
+        return ACTIVE_EXCHANGES;
+    }
+
+    //   Para el spread en Tests
+    public static double getMinScanSpread() {
+        return MIN_SCAN_SPREAD;
+    }
+    // Para simular los activos puente en Test
+    public static List<String> getBridgeAssets() {
+        return BRIDGE_ASSETS;
+    }
+    // --- AGREGAR AL FINAL DE BotConfig.java ---
+
+    public static double getRiskMaxDailyLoss() { return RISK_MAX_DAILY_LOSS; }
+    public static double getRiskMaxDrawdown() { return RISK_MAX_DRAWDOWN; }
+    public static int getRiskMaxConsecutiveLosses() { return RISK_MAX_CONSECUTIVE_LOSSES; }
+    public static long getRiskStreakPauseMs() { return RISK_STREAK_PAUSE_MS; }
+    public static double getRiskMcRuinThreshold() { return RISK_MC_RUIN_THRESHOLD; }
 }
