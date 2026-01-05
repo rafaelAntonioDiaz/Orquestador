@@ -111,8 +111,8 @@ public class BotConfig {
     public static final double RISK_SIM_AVG_WIN = Double.parseDouble(dotenv.get("RISK_SIM_AVG_WIN", "2.0"));
     public static final double RISK_SIM_AVG_LOSS = Double.parseDouble(dotenv.get("RISK_SIM_AVG_LOSS", "2.0"));
 
-    // ... resto de la clase ... // -------------------------------------------------------------------------
-    // 3. 🎲 RISK MODEL (Monte Carlo en el arranque)
+    //  -------------------------------------------------------------------------
+    // 🎲 RISK MODEL (Monte Carlo en el arranque)
     // -------------------------------------------------------------------------
     private static void checkRiskModels(RiskManager riskManager) {
         BotLogger.info("🎲 [RISK] Ejecutando Simulación de Monte Carlo (Perfil Configurado)...");
@@ -133,6 +133,24 @@ public class BotConfig {
         }
         BotLogger.info("✅ [RISK] Modelos matemáticos estables.");
     }
+    // ==========================================
+    // 8. ORÁCULO PROBABILÍSTICO (CORTEX & ORACLE)
+    // ==========================================
+    // Memoria: Cuántos ticks del pasado recordamos (ej: 50 ticks * 1 seg = 50 segs)
+    public static final int ORACLE_HISTORY_SIZE = Integer.parseInt(dotenv.get("ORACLE_HISTORY_SIZE", "50").trim());
+
+    // Ventana de Tiempo para Lead-Lag (ej: 5 ticks = 5 segundos atrás para comparar velocidad)
+    public static final int ORACLE_LEAD_LAG_TICKS = Integer.parseInt(dotenv.get("ORACLE_LEAD_LAG_TICKS", "5").trim());
+
+    // Umbral de Z-Score para Mean Reversion (ej: 3.0 sigmas)
+    public static final double ORACLE_Z_SCORE_THRESHOLD = Double.parseDouble(dotenv.get("ORACLE_Z_SCORE_THRESHOLD", "3.0").trim());
+
+    // Confianza mínima para activar el modo agresivo (0.0 - 1.0)
+    public static final double ORACLE_MIN_CONFIDENCE = Double.parseDouble(dotenv.get("ORACLE_MIN_CONFIDENCE", "0.80").trim());
+
+    // Spread Agresivo: Si el oráculo aprueba, bajamos la exigencia a esto (ej: 0.10%)
+    public static final double ORACLE_AGGRESSIVE_SPREAD = Double.parseDouble(dotenv.get("ORACLE_AGGRESSIVE_SPREAD", "0.001").trim());
+
     // =========================================================================
     // 🛠️ HERRAMIENTAS Y PARSERS
     // =========================================================================
@@ -204,4 +222,5 @@ public class BotConfig {
     public static int getRiskMaxConsecutiveLosses() { return RISK_MAX_CONSECUTIVE_LOSSES; }
     public static long getRiskStreakPauseMs() { return RISK_STREAK_PAUSE_MS; }
     public static double getRiskMcRuinThreshold() { return RISK_MC_RUIN_THRESHOLD; }
+
 }

@@ -4,6 +4,8 @@ import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.FeeManager;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.GlobalBalanceReporter;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.PortfolioHealthManager;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.probabilistic.MarketCortex;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.probabilistic.ProbabilisticOracle;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.estimator.StandardProfitEstimator;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.interfaces.ArbitrageStrategy;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.interfaces.MarketDataProvider;
@@ -44,6 +46,9 @@ public class DeepMarketScanner implements MarketListener {
     // Inteligencia
     private final DynamicPairSelector pairSelector;
     private final GlobalBalanceReporter balanceReporter;
+    // Probabilísticos
+    private final MarketCortex cortex;
+    private final ProbabilisticOracle oracle;
 
     // Ejecución (Legacy adaptado)
     private final CrossTradeExecutor crossExecutor;
@@ -83,6 +88,10 @@ public class DeepMarketScanner implements MarketListener {
         this.profitEstimator = new StandardProfitEstimator(this.feeManager, BotConfig.TEST_CAPITALS);
 
         // 5. Estrategias
+        // --- INICIALIZACIÓN ORACLE ---
+        this.cortex = new MarketCortex();
+        this.oracle = new ProbabilisticOracle(this.cortex);
+
         if (BotConfig.isSpatialStrategy()) {
             // AHORA SÍ FUNCIONA: 'this.cfo' existe y es accesible
             strategies.add(new SpatialArbitrageStrategy(BotConfig.MIN_SCAN_SPREAD, this.cfo));
@@ -122,7 +131,9 @@ public class DeepMarketScanner implements MarketListener {
         // FASE 1: Fetch Global
         Map<String, Map<String, Double>> prices = dataProvider.fetchGlobalPrices(BotConfig.getActiveExchanges());
         if (prices.isEmpty()) return;
-
+        // 🔥 FASE 1.1: INGESTA PARALELA (Sidecar)
+        // Alimentamos el Cortex sin bloquear el flujo principal
+        virtualExecutor.submit(() -> cortex.ingest(prices));
         // FASE 1.5: Prefetch (Con TrafficController interno en Provider)
         dataProvider.prefetchOrderBooks(huntingGrounds, BotConfig.getActiveExchanges()).join();
 
@@ -232,10 +243,12 @@ public class DeepMarketScanner implements MarketListener {
                 ? "⚡ " + opp.asset() + "-" + opp.sellExchange()
                 : opp.buyExchange().substring(0,3) + "->" + opp.sellExchange().substring(0,3);
 
-        // Usamos Locale.US para asegurar puntos decimales
+        // Icono basado en fuente
+        String icon = opp.signalSource().equals("HARD_MATH") ? "💎" : "🔮";
+
         BotLogger.info(String.format(java.util.Locale.US,
-                "║ %s ║ %-6s ║ %-13s ║ %5s ║ %6.2f ║ %6.4f ║ 💎 %6.2f ║",
-                time, opp.asset(), route, "VAR", opp.grossSpreadPct()*100, 0.0, opp.expectedProfit()));
+                "║ %s ║ %-6s ║ %-13s ║ %5s ║ %6.2f ║ %s %6.2f ║ Source: %s",
+                time, opp.asset(), route, "VAR", opp.grossSpreadPct()*100, icon, opp.expectedProfit(), opp.signalSource()));
     }
 
     private void sendTelegramReport() {
@@ -298,5 +311,51 @@ public class DeepMarketScanner implements MarketListener {
      */
     public long getTradesCount() {
         return tradesCount.get();
+    }
+
+    // Método para incluir Lógica Oracle
+    private void processAssetWithOracle(String asset, Map<String, Map<String, Double>> prices) {
+        for (ArbitrageStrategy strategy : strategies) {
+            // 1. Detección Base (Cruda)
+            // Nota: La estrategia usa MIN_SCAN_SPREAD por defecto internamente.
+            // Si la estrategia encuentra algo > 0.3%, lo retorna.
+            // ¿Qué pasa con los de 0.1%? Necesitamos que la estrategia acepte un umbral dinámico
+            // O, más simple para el diseño ADITIVO:
+            // Dejamos que la estrategia encuentre TODO (bajando su umbral interno) y filtramos aquí.
+
+            // Para v4.5: Asumimos que SpatialStrategy busca >= MIN_SCAN_SPREAD.
+            // Si queremos que encuentre oportunidades menores (0.1%), SpatialStrategy debe
+            // configurarse con un umbral base bajo (ej. 0.0005) y filtramos AQUI.
+
+            List<ArbitrageOpportunity> opps = strategy.findOpportunities(asset, prices);
+
+            for (ArbitrageOpportunity opp : opps) {
+                // 2. CONSULTA AL ORÁCULO
+                String targetEx = opp.buyExchange().equals(BotConfig.ADVISOR_REF_EXCHANGE) ? opp.sellExchange() : opp.buyExchange();
+                var verdict = oracle.getVerdict(asset, opp.grossSpreadPct(), targetEx);
+
+                // 3. FILTRADO DINÁMICO
+                // Si el spread es menor al sugerido por el oráculo, descartamos.
+                if (opp.grossSpreadPct() < verdict.suggestedThreshold()) {
+                    continue; // Ruido de mercado
+                }
+
+                // 4. ENRIQUECIMIENTO DEL MODELO
+                // Creamos una nueva instancia del record con los datos del oráculo
+                ArbitrageOpportunity enrichedOpp = new ArbitrageOpportunity(
+                        opp.strategyType(), opp.asset(), opp.buyExchange(), opp.sellExchange(),
+                        opp.priceEntry(), opp.priceExit(), opp.grossSpreadPct(),
+                        opp.quantity(), opp.expectedProfit(), opp.detectedAtTimestamp(),
+                        verdict.confidenceScore(), verdict.signalSource() // Inyectamos Veredicto
+                );
+
+                // 5. Validación Financiera
+                ArbitrageOpportunity verified = profitEstimator.estimateProfitability(enrichedOpp, currentSnapshot, dataProvider);
+
+                if (verified != null) {
+                    executeOpportunity(verified);
+                }
+            }
+        }
     }
 }

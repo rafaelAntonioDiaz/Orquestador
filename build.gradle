@@ -11,7 +11,6 @@ java {
 
 tasks.withType(JavaCompile) {
     options.release = 25
-    // 🔥 ESTA ES LA LLAVE DEL FERRARI:
     options.compilerArgs.add("--enable-preview")
 }
 
@@ -62,13 +61,16 @@ application {
 
 jar {
     manifest {
-        // Le decimos a Java exactamente dónde arrancar
-        attributes 'Main-Class': 'com.rafaeldiaz.orquestador_gold_rush_2025.core.main.Main'
+        attributes(
+                'Main-Class': 'com.rafaeldiaz.orquestador_gold_rush_2025.core.main.Main'
+        )
     }
-    // Esto mete todas las librerías (OkHttp, Jackson, etc.) DENTRO del JAR
+
+    // Esto le dice a Gradle: "Toma todas las librerías, descomprímelas y mételas dentro de mi JAR"
     from {
         configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
     }
-    // Evita conflictos de archivos duplicados
+
+    // Vital para evitar errores de archivos duplicados (META-INF, license, etc.)
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
