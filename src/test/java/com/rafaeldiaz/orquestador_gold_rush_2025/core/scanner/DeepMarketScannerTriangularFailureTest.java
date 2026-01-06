@@ -109,23 +109,43 @@ class DeepMarketScannerTriangularFailureTest {
         lenient().when(mockConnector.fetchAllPrices(eq(EXCHANGE))).thenReturn(dummyPrices);
 
         // --- 2. CONFIGURAR DRAMA EN LAS ÓRDENES ---
+        // CORRECCIÓN: Usamos doReturn().when() para evitar que se ejecute la implementación real
+        // que internamente llamaba a fetchBalance() causando el error.
 
         // PASO 1: ÉXITO (Compramos 10 SOL)
         OrderResult r1 = new OrderResult("ord1", "FILLED", 10.0, 10.0, 1000.0, 100.0, 0.1, "BNB");
-        when(mockConnector.placeOrder(eq(EXCHANGE), eq(P1_USDT), eq("BUY"), contains("LIMIT"), anyDouble(), anyDouble()))
-                .thenReturn(r1);
+        doReturn(r1).when(mockConnector).placeOrder(
+                eq(EXCHANGE),
+                eq(P1_USDT),
+                eq("BUY"),
+                contains("LIMIT"),
+                anyDouble(),
+                anyDouble()
+        );
 
         // PASO 2: FALLO TOTAL (Intentamos vender SOL por BTC y nos rechazan)
         // Simulamos un "REJECTED" o un Timeout que deja el estado en no-filled
         OrderResult r2 = new OrderResult("ord2", "REJECTED", 10.0, 0.0, 0.0, 0.0, 0.0, "NONE");
-        when(mockConnector.placeOrder(eq(EXCHANGE), eq(P2_BRIDGE), eq("SELL"), eq("MARKET"), anyDouble(), anyDouble()))
-                .thenReturn(r2);
+        doReturn(r2).when(mockConnector).placeOrder(
+                eq(EXCHANGE),
+                eq(P2_BRIDGE),
+                eq("SELL"),
+                eq("MARKET"),
+                anyDouble(),
+                anyDouble()
+        );
 
         // SALIDA DE EMERGENCIA: Venta de Pánico (SOL -> USDT)
         // El bot debería intentar vender los 10 SOL adquiridos en r1 de vuelta a USDT
         OrderResult rEmergency = new OrderResult("ordEmg", "FILLED", 10.0, 10.0, 990.0, 99.0, 0.1, "BNB");
-        when(mockConnector.placeOrder(eq(EXCHANGE), eq(P1_USDT), eq("SELL"), eq("MARKET"), eq(10.0), anyDouble()))
-                .thenReturn(rEmergency);
+        doReturn(rEmergency).when(mockConnector).placeOrder(
+                eq(EXCHANGE),
+                eq(P1_USDT),
+                eq("SELL"),
+                eq("MARKET"),
+                eq(10.0),
+                anyDouble()
+        );
 
         // --- 3. ESTADO DEL SCANNER ---
         scanner.setDryRun(false);

@@ -13,8 +13,10 @@ import com.rafaeldiaz.orquestador_gold_rush_2025.core.interfaces.ProfitEstimator
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.BotConfig;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.ExecutionCoordinator;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.provider.CachingMarketDataProvider;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.strategy.impl.AdaptiveSpatialStrategy;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.strategy.impl.SpatialArbitrageStrategy;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.strategy.impl.TriangularArbitrageStrategy;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.telemetry.DashboardService;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.telemetry.MetricsService;
 import com.rafaeldiaz.orquestador_gold_rush_2025.execution.CrossTradeExecutor;
 import com.rafaeldiaz.orquestador_gold_rush_2025.execution.RiskManager;
@@ -39,10 +41,10 @@ public class DeepMarketScanner implements MarketListener {
     // Componentes del Sistema
     private final ExchangeConnector connector;
     private final ExecutionCoordinator coordinator;
-    private final CachingMarketDataProvider dataProvider; // Tipo concreto para acceder a métricas extra
+    private final CachingMarketDataProvider dataProvider;
     private final ProfitEstimator profitEstimator;
     private final com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.FeeManager feeManager;
-    private final PortfolioHealthManager cfo; // <--- AGREGAR ESTA LÍNEA
+    private final PortfolioHealthManager cfo;
     // Inteligencia
     private final DynamicPairSelector pairSelector;
     private final GlobalBalanceReporter balanceReporter;
@@ -63,7 +65,11 @@ public class DeepMarketScanner implements MarketListener {
     private boolean dryRun = BotConfig.DRY_RUN;
     private final AtomicLong tradesCount = new AtomicLong(0);
     private final DoubleAdder totalPotentialProfit = new DoubleAdder();
-
+    // [NEON] 💾 VARIABLES PARA EL DASHBOARD CYBERPUNK
+    private final DashboardService dashboard = new DashboardService();
+    private final java.util.Map<String, Long> networkLatencies = new java.util.concurrent.ConcurrentHashMap<>();
+    private final AtomicLong cyclesCount = new AtomicLong(0);
+    private final java.time.Instant bootTime = java.time.Instant.now();
     // Hilos
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     private final ExecutorService virtualExecutor = Executors.newVirtualThreadPerTaskExecutor();
@@ -96,8 +102,11 @@ public class DeepMarketScanner implements MarketListener {
             // AHORA SÍ FUNCIONA: 'this.cfo' existe y es accesible
             strategies.add(new SpatialArbitrageStrategy(BotConfig.MIN_SCAN_SPREAD, this.cfo));
         }
+        if (BotConfig.isSpatialStrategy()) {
+            strategies.add(new AdaptiveSpatialStrategy(this.cfo));
+        }
 
-        // 6. Ejecutores
+            // 6. Ejecutores
         RiskManager riskPolice = new RiskManager(BotConfig.SEED_CAPITAL, coordinator);
         this.crossExecutor = new CrossTradeExecutor(connector, riskPolice, coordinator);
         this.triangularExecutor = new TriangularExecutor(connector);
@@ -106,14 +115,18 @@ public class DeepMarketScanner implements MarketListener {
 
     public void startOmniScan(int durationMinutes) {
         BotLogger.info("⚡ AGENTE TOKIO v4.3: INTEGRIDAD VERIFICADA");
-        printHeader(); // Restauramos el header visual v3.1
+       // printHeader(); // Restauramos el header visual v3.1
 
         pairSelector.start();
         balanceReporter.printReport();
 
         scheduler.scheduleAtFixedRate(this::refreshBalances, 0, 5, TimeUnit.SECONDS);
         scheduler.scheduleAtFixedRate(this::sendTelegramReport, BotConfig.REPORT_INTERVAL_MIN, BotConfig.REPORT_INTERVAL_MIN, TimeUnit.MINUTES);
+        // [NEON] 1. PROBADOR DE RED (Ping Real cada 5s)
+        scheduler.scheduleWithFixedDelay(this::pingNetwork, 2, 5, TimeUnit.SECONDS);
 
+        // [NEON] 2. INTERFAZ CYBERPUNK (Refresco visual cada 3s)
+        scheduler.scheduleAtFixedRate(this::printCyberpunkDashboard, 3, 3, TimeUnit.SECONDS);
         Thread.ofVirtual().start(() -> {
             long endTime = System.currentTimeMillis() + (durationMinutes * 60 * 1000L);
             while (System.currentTimeMillis() < endTime) {
@@ -140,7 +153,7 @@ public class DeepMarketScanner implements MarketListener {
         // FASE 2: Pipeline de Estrategias
         try (var scope = Executors.newVirtualThreadPerTaskExecutor()) {
             List<Callable<Void>> tasks = huntingGrounds.stream().map(asset -> (Callable<Void>) () -> {
-                processAsset(asset, prices);
+                processAssetWithOracle(asset, prices);
                 return null;
             }).toList();
             scope.invokeAll(tasks);
@@ -148,6 +161,17 @@ public class DeepMarketScanner implements MarketListener {
 
         dataProvider.invalidateCache();
         MetricsService.get().recordOp();
+        cyclesCount.incrementAndGet();
+        // [NEON] ACTUALIZAR DASHBOARD HTML
+        dashboard.updateNetwork(networkLatencies);
+        dashboard.updateStats(cyclesCount.get(), totalPotentialProfit.sum());
+
+        // Pasamos datos del Oráculo (si los tenemos a mano, o 0.0)
+        // Para simplificar, puede pasar 0.0 por ahora o capturar el último 'verdict'
+
+        dashboard.updateInventory(currentSnapshot.balances());
+        dashboard.updateStats(cyclesCount.get(), totalPotentialProfit.sum());
+        dashboard.generate();
     }
 
     private void processAsset(String asset, Map<String, Map<String, Double>> prices) {
@@ -229,7 +253,13 @@ public class DeepMarketScanner implements MarketListener {
     public void updateTargets(List<String> targets) {
         huntingGrounds.clear();
         targets.forEach(t -> huntingGrounds.add(t.replace("USDT", "")));
-        BotLogger.info("🎯 Targets Refresh: " + huntingGrounds.size());
+
+        // ANTES: Imprimía en consola
+        // AHORA: Silencio absoluto en consola.
+        // Si hay cambios drásticos, el DynamicPairSelector se encargará de notificar al Telegram.
+
+        // Solo actualizamos el log interno del Dashboard HTML
+        dashboard.addLog("🎯 RADAR ACTUALIZADO: " + huntingGrounds.size() + " Activos");
     }
 
     // Formato visual de tablas idéntico al v3.1
@@ -328,17 +358,29 @@ public class DeepMarketScanner implements MarketListener {
             // configurarse con un umbral base bajo (ej. 0.0005) y filtramos AQUI.
 
             List<ArbitrageOpportunity> opps = strategy.findOpportunities(asset, prices);
+            if (BotConfig.DRY_RUN && !opps.isEmpty()) {
+                BotLogger.info(String.format(
+                        "🔍 RAW DETECTION: %s found %d opportunities (spreads: %.3f%% - %.3f%%)",
+                        asset, opps.size(),
+                        opps.stream().mapToDouble(o -> o.grossSpreadPct()*100).min().orElse(0),
+                        opps.stream().mapToDouble(o -> o.grossSpreadPct()*100).max().orElse(0)
+                ));
+            }
 
             for (ArbitrageOpportunity opp : opps) {
                 // 2. CONSULTA AL ORÁCULO
-                String targetEx = opp.buyExchange().equals(BotConfig.ADVISOR_REF_EXCHANGE) ? opp.sellExchange() : opp.buyExchange();
+                String targetEx = opp.buyExchange().equals(BotConfig.ADVISOR_REF_EXCHANGE)
+                        ? opp.sellExchange()
+                        : opp.buyExchange();
                 var verdict = oracle.getVerdict(asset, opp.grossSpreadPct(), targetEx);
 
                 // 3. FILTRADO DINÁMICO
                 // Si el spread es menor al sugerido por el oráculo, descartamos.
-                if (opp.grossSpreadPct() < verdict.suggestedThreshold()) {
-                    continue; // Ruido de mercado
-                }
+
+                    if (opp.grossSpreadPct() < verdict.suggestedThreshold()) {
+                        dashboard.addLog("🚫 REJECTED: " + asset + " Spread: " + String.format("%.3f", opp.grossSpreadPct()*100) + "% < Req: " + String.format("%.3f", verdict.suggestedThreshold()*100) + "%");
+                        continue;
+                    }
 
                 // 4. ENRIQUECIMIENTO DEL MODELO
                 // Creamos una nueva instancia del record con los datos del oráculo
@@ -346,7 +388,7 @@ public class DeepMarketScanner implements MarketListener {
                         opp.strategyType(), opp.asset(), opp.buyExchange(), opp.sellExchange(),
                         opp.priceEntry(), opp.priceExit(), opp.grossSpreadPct(),
                         opp.quantity(), opp.expectedProfit(), opp.detectedAtTimestamp(),
-                        verdict.confidenceScore(), verdict.signalSource() // Inyectamos Veredicto
+                        verdict.confidenceScore(), verdict.signalSource()
                 );
 
                 // 5. Validación Financiera
@@ -358,4 +400,38 @@ public class DeepMarketScanner implements MarketListener {
             }
         }
     }
-}
+    // =================================================================================
+    // 🌆 TOKYO NEON DASHBOARD (VISUALIZACIÓN TÁCTICA)
+    // =================================================================================
+
+    private void pingNetwork() {
+        // Usa hilos virtuales para pings paralelos reales
+        BotConfig.getActiveExchanges().forEach(ex -> virtualExecutor.submit(() -> {
+            long start = System.currentTimeMillis();
+            try {
+                // Golpeamos endpoint público ligero para medir la fibra
+                connector.fetchPrice(ex, "BTCUSDT");
+                long latency = System.currentTimeMillis() - start;
+                networkLatencies.put(ex, latency);
+            } catch (Exception e) {
+                networkLatencies.put(ex, 9999L); // Código de error (Offline)
+            }
+        }));
+    }
+
+    private void printCyberpunkDashboard() {
+        // 1. SILENCIO: Actualizamos el HTML en segundo plano sin imprimir nada
+        dashboard.updateNetwork(networkLatencies);
+        dashboard.updateStats(cyclesCount.get(), totalPotentialProfit.sum());
+        dashboard.generate(); // Escribe dashboard.html
+
+        // 2. CONSOLA ZEN: Una sola línea que se actualiza (Heartbeat)
+        // Usamos "\r" para volver al inicio de la línea y sobreescribir
+        long latBinance = networkLatencies.getOrDefault("binance", 0L);
+
+        System.out.print("\r⏳ CICLOS: " + cyclesCount.get() +
+                " | 💰 PnL: $" + String.format("%.2f", totalPotentialProfit.sum()) +
+                " | 📡 RED: " + latBinance + "ms" +
+                " | 🛡️ ESTADO: CAZANDO...        ");
+        // Los espacios al final son para limpiar residuos de texto anterior
+    }}

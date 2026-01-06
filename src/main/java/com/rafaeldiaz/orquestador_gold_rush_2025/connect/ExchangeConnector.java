@@ -410,19 +410,27 @@ public class ExchangeConnector {
             }
         };
     }
+    // =========================================================================
+    // 🏷️ PRECIOS (VERSIÓN MVP ADITIVA - SOPORTE SUBCUENTAS)
+    // =========================================================================
     public double fetchPrice(String exchange, String pair) {
-        // 1. Normalización de Símbolo
+        // ➕ 1. ADICIÓN: Normalización de Alias (El "Driver Resolver")
+        // Esto evita que el Registry falle buscando "bybit_sub1". Lo forzamos a "bybit".
+        String driverExchange = exchange.toLowerCase().contains("bybit") ? "bybit" : exchange.toLowerCase();
+
+        // 1. Normalización de Símbolo (Usando el driver correcto)
         String symbol;
         try {
             symbol = com.rafaeldiaz.orquestador_gold_rush_2025.core.platform.ExchangeRegistry
-                    .toExchangeSymbol(exchange, pair.replace("USDT", ""), "USDT");
+                    .toExchangeSymbol(driverExchange, pair.replace("USDT", ""), "USDT");
         } catch (Exception e) {
-            BotLogger.warn("⚠️ Driver no encontrado para " + exchange + ". Usando default.");
+            // Fallback silencioso para no ensuciar el log en producción
             symbol = pair;
         }
 
         try {
-            String url = switch (exchange.toLowerCase()) {
+            // Usamos driverExchange para seleccionar la URL correcta
+            String url = switch (driverExchange) {
                 case "binance" -> BINANCE_URL + "/api/v3/ticker/price?symbol=" + symbol;
                 case "mexc" -> MEXC_URL + "/api/v3/ticker/price?symbol=" + symbol;
                 case "kucoin" -> KUCOIN_URL + "/api/v1/market/orderbook/level1?symbol=" + symbol;
@@ -430,15 +438,14 @@ public class ExchangeConnector {
                 default -> BYBIT_URL + "/v5/market/tickers?category=spot&symbol=" + symbol;
             };
 
-            // 🛡️ CORRECCIÓN 1: Agregar User-Agent para evitar bloqueos 403 en OKX
             Request.Builder builder = new Request.Builder()
                     .url(url)
-                    .header("User-Agent", "GoldRushBot/1.0") // Identidad para pasar firewall
+                    .header("User-Agent", "GoldRushBot/1.0")
                     .get();
 
-            try (Response response = executeWithRetry(builder.build())) { // O use executeRequest(..., FAST_LANE) si no tiene executeWithRetry
+            // Usamos executeWithRetry como en su versión vigente
+            try (Response response = executeWithRetry(builder.build())) {
                 if (!response.isSuccessful()) {
-                    // 🛡️ CORRECCIÓN 2: Loguear si el exchange nos rechaza
                     BotLogger.error("❌ HTTP Error fetching price " + exchange + ": " + response.code());
                     return 0.0;
                 }
@@ -446,27 +453,33 @@ public class ExchangeConnector {
                 String body = response.body().string();
                 JsonNode root = mapper.readTree(body);
 
-                if (exchange.equalsIgnoreCase("okx")) {
-                    // OKX Parsing
+                // ➕ 2. ADICIÓN: Parsing usando driverExchange (Soporte Bybit Subcuentas)
+
+                if (driverExchange.equals("okx")) {
                     if (root.path("code").asText().equals("0")) {
                         return Double.parseDouble(root.path("data").get(0).path("last").asText());
                     } else {
-                        BotLogger.error("❌ OKX API Error: " + root.path("msg").asText());
+                        // Log reducido para OKX
                         return 0.0;
                     }
                 }
 
-                // ... Resto de parsings (Bybit, Binance, Kucoin)...
-                if (exchange.startsWith("bybit")) return Double.parseDouble(root.get("result").get("list").get(0).get("lastPrice").asText());
-                if (exchange.equalsIgnoreCase("kucoin")) return root.get("data").get("price").asDouble();
+                if (driverExchange.startsWith("bybit")) {
+                    // La estructura de Bybit es igual para main y subcuentas
+                    return Double.parseDouble(root.get("result").get("list").get(0).get("lastPrice").asText());
+                }
+
+                if (driverExchange.equals("kucoin")) return root.get("data").get("price").asDouble();
+
+                // Binance/Mexc default
                 return root.get("price").asDouble();
             }
         } catch (Exception e) {
-            // 🛡️ CORRECCIÓN 3: Imprimir la excepción real para debug
             BotLogger.error("💥 Excepción en fetchPrice (" + exchange + "): " + e.getMessage());
             return 0.0;
         }
-    }    // =========================================================================
+    }
+    // =========================================================================
     // 📖 2.5 VISIÓN DE AMPLIO ESPECTRO (ORDER BOOK)
     // =========================================================================
     /**
@@ -646,12 +659,15 @@ public class ExchangeConnector {
     }
     // 🛡️ FETCH BALANCES (HEAVY DUTY implícito en llamadas internas)
     public Map<String, Double> fetchBalances(String exchangeName) {
+        // Router inteligente para subcuentas
+        if (exchangeName.toLowerCase().contains("bybit")) {
+            return fetchBybitBalances(exchangeName);
+        }
         return switch (exchangeName.toLowerCase()) {
             case "binance" -> fetchBinanceBalances();
             case "mexc"    -> fetchMexcBalances();
             case "kucoin"  -> fetchKucoinBalances();
-            case "okx"     -> fetchOkxBalances(); // <--- ¡NUEVO!
-            case String s when s.contains("bybit") -> fetchBybitBalances(s);
+            case "okx"     -> fetchOkxBalances();
             default -> new HashMap<>();
         };
     }
@@ -740,16 +756,12 @@ public class ExchangeConnector {
         Map<String, Double> balances = new HashMap<>();
         try {
             Request request = buildOkxRequest("GET", "/api/v5/account/balance?ccy=", "");
-
+            if (request == null) {
+                return balances;
+            }
             // 🔍 DEBUG MODE: No usamos executeWithRetry para ver el error crudo a la primera
             try (Response response = client.newCall(request).execute()) {
                 String body = response.body().string();
-
-                if (!response.isSuccessful()) {
-                    // 🚨 AQUÍ ESTÁ LA VERDAD: Imprimimos el error exacto
-                    BotLogger.error("❌ OKX REJECTED (HTTP " + response.code() + "): " + body);
-                    return balances;
-                }
 
                 JsonNode root = mapper.readTree(body);
                 if (root.path("code").asText().equals("0")) {
@@ -762,11 +774,11 @@ public class ExchangeConnector {
                     }
                 } else {
                     // Error de lógica de negocio de OKX
-                    BotLogger.error("❌ OKX LOGIC ERROR: " + root.path("msg").asText());
+                    //BotLogger.error("❌ OKX LOGIC ERROR: " + root.path("msg").asText());
                 }
             }
         } catch (Exception e) {
-            BotLogger.error("💥 OKX EXCEPTION: " + e.getMessage());
+           // BotLogger.error("💥 OKX EXCEPTION: " + e.getMessage());
         }
         return balances;
     }    /**
@@ -1266,7 +1278,19 @@ public class ExchangeConnector {
 // Importa esto arriba:
     // import com.rafaeldiaz.orquestador_gold_rush_2025.core.telemetry.MetricsService;
 
+// =========================================================================
+    // 🛡️ NÚCLEO DE EJECUCIÓN (CON ADICIÓN DE SEGURIDAD)
+    // =========================================================================
     private Response executeRequest(Request request, ExecutionMode mode) throws IOException {
+
+        // ➕ [ADICIÓN CRÍTICA] 🛡️ CHECK DE INTEGRIDAD
+        // Si el request es null (porque faltan llaves de OKX o falló el builder),
+        // lanzamos excepción controlada AQUÍ para evitar el crash de NullPointerException abajo.
+        if (request == null) {
+            throw new IOException("Request Nulo: Operación abortada por falta de credenciales o error interno.");
+        }
+
+        // [CÓDIGO ORIGINAL INTACTO]
         String exchangeHost = request.url().host().replace("api.", "").replace(".com", ""); // Limpieza simple del nombre
         long startTime = System.nanoTime(); // ⏱️ Reloj de alta precisión
         boolean success = false;

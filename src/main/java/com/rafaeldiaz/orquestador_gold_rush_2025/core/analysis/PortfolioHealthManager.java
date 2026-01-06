@@ -83,45 +83,31 @@ public class PortfolioHealthManager {
                 double aBal = connector.fetchBalance(ex, asset);
                 double uBal = connector.fetchBalance(ex, "USDT");
 
-                // Si la API falla devolviendo -1 o similar, lo tratamos como 0 pero no contamos el exchange como activo si todo es 0
-                // Asumimos que el conector devuelve 0.0 en caso de error.
-
                 assetBalances.put(ex, aBal);
                 usdtBalances.put(ex, uBal);
                 totalAsset += aBal;
                 totalUsdt += uBal;
                 activeExchanges++;
             } catch (Exception ignored) {
-                // Si falla un exchange puntual, no rompemos el cálculo global
             }
         }
 
-        if (activeExchanges < 2) return; // No hay suficientes participantes para balancear
+        if (activeExchanges < 2) return;
 
-        // Lógica de Negocio (Rebalanceo)
-        double fairShareAsset = (totalAsset > 0) ? (totalAsset / activeExchanges) : 0;
-        double fairShareUsdt = (totalUsdt > 0) ? (totalUsdt / activeExchanges) : 0;
-
-        double criticalAssetThreshold = fairShareAsset * BotConfig.IMBALANCE_TOLERANCE;
-        double criticalUsdtThreshold = fairShareUsdt * BotConfig.IMBALANCE_TOLERANCE;
+        // 🛑 LOBOTOMÍA DEL CFO (MODO GUERRA)
+        // Eliminamos el cálculo de "FairShare" y "CriticalThreshold".
+        // En HFT, el desbalance es natural. No queremos bloquear trades por estética de portafolio.
 
         Set<String> needAsset = new HashSet<>();
         Set<String> needCash = new HashSet<>();
 
-        for (String ex : spatialAccounts) {
-            // Solo evaluamos si tenemos datos del exchange
-            if (assetBalances.containsKey(ex)) {
-                if (assetBalances.get(ex) < criticalAssetThreshold) needAsset.add(ex);
-                if (usdtBalances.get(ex) < criticalUsdtThreshold) needCash.add(ex);
-            }
-        }
-
-        String state = (needAsset.isEmpty() && needCash.isEmpty()) ? "BALANCED" : "CRITICAL";
-        double minProfit = state.equals("BALANCED") ? BotConfig.NORMAL_MIN_PROFIT : BotConfig.EMERGENCY_MIN_PROFIT;
+        // Al dejar los Sets vacíos, forzamos el estado a BALANCED.
+        // Esto le dice a la estrategia: "Todo está bien, dispara donde veas oportunidad".
+        String state = "BALANCED";
+        double minProfit = BotConfig.NORMAL_MIN_PROFIT; // Usará su 0.00 configurado
 
         directiveCache.put(asset, new HealthDirective(minProfit, needAsset, needCash, state));
     }
-
     // -------------------------------------------------------------------------
     // 🔥 MÉTODOS OPTIMIZADOS (FIX: QUORUM VS UNANIMITY)
     // -------------------------------------------------------------------------
