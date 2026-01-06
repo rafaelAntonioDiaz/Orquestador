@@ -2,15 +2,16 @@ package com.rafaeldiaz.orquestador_gold_rush_2025.core.strategy.impl;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.PortfolioHealthManager;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.interfaces.ArbitrageStrategy;
-import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.BotConfig;
 import com.rafaeldiaz.orquestador_gold_rush_2025.model.ArbitrageOpportunity;
+import com.rafaeldiaz.orquestador_gold_rush_2025.utils.DecisionAuditor;
 
 import java.util.*;
 
 /**
- * 🎯 SPATIAL STRATEGY v2.0 (ADAPTIVE)
- * - Usa umbrales BASE ultra-bajos (0.05%) para detectar TODO
- * - El Oracle decide qué ejecutar (separación de responsabilidades)
+ * 🎯 SPATIAL STRATEGY v2.1 (ADAPTIVE & ROBUST)
+ * - Usa umbrales BASE ultra-bajos (0.05%) para detectar TODO.
+ * - Null-Safe: Funciona incluso si el CFO no está disponible (modo test).
+ * - Trazabilidad: Integra sensores del DecisionAuditor.
  */
 public class AdaptiveSpatialStrategy implements ArbitrageStrategy {
 
@@ -37,8 +38,23 @@ public class AdaptiveSpatialStrategy implements ArbitrageStrategy {
         List<ArbitrageOpportunity> opportunities = new ArrayList<>();
         long timestamp = System.currentTimeMillis();
 
-        // 1️⃣ VALIDACIÓN: ¿Tenemos saldo en este activo?
-        Set<String> validExchanges = cfo.getValidExchangesForAsset(asset);
+        // 1️⃣ VALIDACIÓN ROBUSTA (Fix para Tests y Null Safety)
+        // Integración: Si estamos en Test (cfo null), asumimos que todo exchange con precio es válido.
+        Set<String> validExchanges;
+
+        if (cfo != null) {
+            // Modo Producción: Usamos lo que diga el CFO (Inventario real)
+            validExchanges = cfo.getValidExchangesForAsset(asset);
+        } else {
+            // Modo Test/Fallback: Simulamos validez basada en disponibilidad de precio
+            validExchanges = new HashSet<>();
+            for (String ex : globalPrices.keySet()) {
+                if (globalPrices.get(ex).containsKey(asset + "USDT")) {
+                    validExchanges.add(ex);
+                }
+            }
+        }
+
         if (validExchanges.size() < 2) return opportunities; // Necesitamos mínimo 2 cuentas
 
         // 2️⃣ OPTIMIZACIÓN: Construir mapa de precios de exchanges válidos
@@ -74,12 +90,23 @@ public class AdaptiveSpatialStrategy implements ArbitrageStrategy {
                 // 🔍 CÁLCULO DE SPREAD BRUTO
                 double spreadPct = (sellPrice - buyPrice) / buyPrice;
 
-                // ✅ DETECCIÓN ULTRA-SENSIBLE (sin filtrado aquí)
-                if (spreadPct >= DETECTION_THRESHOLD) {
+                // 📸 SENSOR ADAPTATIVE + LÓGICA DE NEGOCIO INTEGRADA
+                if (spreadPct < DETECTION_THRESHOLD) {
+                    // Si el spread es positivo pero muy bajo, solo logueamos el rechazo
+                    if (spreadPct > 0) {
+                        DecisionAuditor.log(
+                                getName(), asset, buyEx + "->" + sellEx, spreadPct, 0.0,
+                                "RADAR", "RECHAZADO", "Spread menor a umbral adaptativo");
+                    }
+                } else {
+                    // ✅ CUMPLE EL UMBRAL: Logueamos CANDIDATO y Agregamos
+                    DecisionAuditor.log(
+                            getName(), asset, buyEx + "->" + sellEx, spreadPct, 0.0,
+                            "RADAR", "CANDIDATO", "Detectado por Adaptive Logic");
+
                     // 📦 CREAMOS LA OPORTUNIDAD CRUDA
-                    // El Oracle decidirá si es viable o ruido
                     opportunities.add(new ArbitrageOpportunity(
-                            "SPATIAL_ADAPTIVE",
+                            getName(), // Usamos el nombre dinámico de la clase
                             asset,
                             buyEx,
                             sellEx,
@@ -89,8 +116,8 @@ public class AdaptiveSpatialStrategy implements ArbitrageStrategy {
                             0.0, // Cantidad calculada por ProfitEstimator
                             0.0, // Profit calculado por ProfitEstimator
                             timestamp,
-                            0.5, // Score provisional (Oracle lo ajustará)
-                            "RAW_DETECTION" // Fuente temporal
+                            0.5, // Score provisional
+                            "RAW_DETECTION"
                     ));
                 }
             }

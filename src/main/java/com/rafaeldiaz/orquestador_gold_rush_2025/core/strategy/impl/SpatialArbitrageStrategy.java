@@ -4,6 +4,7 @@ import com.rafaeldiaz.orquestador_gold_rush_2025.core.interfaces.ArbitrageStrate
 import com.rafaeldiaz.orquestador_gold_rush_2025.model.ArbitrageOpportunity;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.PortfolioHealthManager;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.BotConfig;
+import com.rafaeldiaz.orquestador_gold_rush_2025.utils.DecisionAuditor;
 
 import java.util.Collections;
 import java.util.Set;
@@ -84,6 +85,27 @@ public class SpatialArbitrageStrategy implements ArbitrageStrategy {
 
             // Cálculo del spread bruto: (Venta - Compra) / Compra
             double spread = (maxBid - minAsk) / minAsk;
+            // --- 📸 SENSOR DE TRAZABILIDAD (ETAPA 1: RADAR) ---
+            if (spread < minSpreadThreshold) {
+                // 🏳️ SPREAD_TOO_LOW
+                // Solo logueamos si es positivo para evitar basura
+                if (spread > 0) {
+                    // Opcional: Loguear solo 1 de cada 10 para no saturar si es muy frecuente
+                    // if (System.currentTimeMillis() % 10 == 0) ...
+                    DecisionAuditor.log(getName(), asset, bestBuyEx + "->" + bestSellEx, spread, 0.0,
+                            "RADAR", "RECHAZADO", "Spread menor a config (" + (minSpreadThreshold*100) + "%)");
+                }
+            } else {
+                    // 🚩 SPREAD_OK
+                    DecisionAuditor.log(getName(), asset, bestBuyEx + "->" + bestSellEx, spread, 0.0,
+                        "RADAR", "CANDIDATO", "Pasa filtro de spread bruto");
+
+                    opportunities.add(new ArbitrageOpportunity(
+                        getName(), asset, bestBuyEx, bestSellEx, minAsk, maxBid, spread,
+                        0.0, 0.0, System.currentTimeMillis()
+                    ));
+                }
+// --- FIN SENSOR ---
 
             if (spread > minSpreadThreshold) {
                 opportunities.add(new ArbitrageOpportunity(

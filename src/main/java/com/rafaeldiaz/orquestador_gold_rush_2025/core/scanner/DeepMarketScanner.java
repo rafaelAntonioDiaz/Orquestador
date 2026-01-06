@@ -176,18 +176,48 @@ public class DeepMarketScanner implements MarketListener {
 
     private void processAsset(String asset, Map<String, Map<String, Double>> prices) {
         for (ArbitrageStrategy strategy : strategies) {
+            // ETAPA 1: El Radar (Ya tiene su log interno en la estrategia, aquí recibimos los candidatos)
             List<ArbitrageOpportunity> opps = strategy.findOpportunities(asset, prices);
+
             for (ArbitrageOpportunity opp : opps) {
-                // Validación Financiera (Balance, Fees, VWAP)
+                String route = opp.buyExchange() + "->" + opp.sellExchange();
+
+                // ETAPA 2 y 3: La Aduana y el Contador (Validación Financiera)
                 ArbitrageOpportunity verified = profitEstimator.estimateProfitability(opp, currentSnapshot, dataProvider);
 
                 if (verified != null) {
+                    // 🚩 BANDERA VERDE: PASA A EJECUCIÓN
+                    // Registramos que sobrevivió a los Fees y al Inventario
+                    com.rafaeldiaz.orquestador_gold_rush_2025.utils.DecisionAuditor.log(
+                            opp.strategyType(),
+                            asset,
+                            route,
+                            opp.grossSpreadPct(),
+                            verified.expectedProfit(),
+                            "FINANCIERO",
+                            "APROBADO",
+                            "Profit Neto: $" + String.format("%.4f", verified.expectedProfit())
+                    );
+
                     executeOpportunity(verified);
+
+                } else {
+                    // 🏳️ BANDERA BLANCA: MUERTE SILENCIOSA
+                    // Aquí es donde mueren tus trades hoy. El auditor nos dirá si fue por fees o saldo.
+                    com.rafaeldiaz.orquestador_gold_rush_2025.utils.DecisionAuditor.log(
+                            opp.strategyType(),
+                            asset,
+                            route,
+                            opp.grossSpreadPct(),
+                            -1.0, // PnL no calculado o negativo
+                            "FINANCIERO",
+                            "RECHAZADO",
+                            "Fees excesivos, PnL negativo o Sin Saldo en " + opp.sellExchange()
+                    );
                 }
             }
         }
     }
-
     private void executeOpportunity(ArbitrageOpportunity opp) {
         // Restauramos los logs visuales de v3.1
         printFormattedLog(opp);

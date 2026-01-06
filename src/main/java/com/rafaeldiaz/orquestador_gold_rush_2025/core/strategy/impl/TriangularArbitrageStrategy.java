@@ -61,10 +61,20 @@ public class TriangularArbitrageStrategy implements ArbitrageStrategy {
 
                     double finalUsdt = (1.0 / priceBase) * priceCross * priceBridge;
                     double potentialProfitPct = finalUsdt - 1.0;
-
-                    if (potentialProfitPct > minProfitThreshold) {
-                        // 💎 ¡Oportunidad Encontrada!
-                        opportunities.add(new ArbitrageOpportunity(
+// 📸 SENSOR TRIANGULAR
+                    if (potentialProfitPct < minProfitThreshold) {
+                        if (potentialProfitPct > 0) {
+                            com.rafaeldiaz.orquestador_gold_rush_2025.utils.DecisionAuditor.log(
+                                    getName(), asset, exchange + " (Loop " + bridge + ")", potentialProfitPct, 0.0,
+                                    "RADAR", "RECHAZADO", "Profit triangular insuficiente");
+                        }
+                    } else {
+                        com.rafaeldiaz.orquestador_gold_rush_2025.utils.DecisionAuditor.log(
+                        getName(), asset, exchange + " (Loop " + bridge + ")", potentialProfitPct, 0.0,
+                        "RADAR", "CANDIDATO", "Triangulación viable");
+                        if (potentialProfitPct > minProfitThreshold) {
+                            // 💎 ¡Oportunidad Encontrada!
+                            opportunities.add(new ArbitrageOpportunity(
                                 getName(),
                                 asset,         // Activo Principal (ej: LTC)
                                 exchange,      // Exchange (ej: BINANCE)
@@ -75,7 +85,8 @@ public class TriangularArbitrageStrategy implements ArbitrageStrategy {
                                 0.0,
                                 0.0,
                                 System.currentTimeMillis()
-                        ));
+                            ));
+                        }
                     }
                 }
             }

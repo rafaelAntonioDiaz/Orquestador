@@ -2,6 +2,7 @@ package com.rafaeldiaz.orquestador_gold_rush_2025.execution;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.ExecutionCoordinator;
+import com.rafaeldiaz.orquestador_gold_rush_2025.utils.DecisionAuditor;
 import com.rafaeldiaz.orquestador_gold_rush_2025.model.OrderResult;
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 
@@ -76,11 +77,14 @@ public class CrossTradeExecutor {
     private void processResults(String buyEx, OrderResult buyRes, String sellEx, OrderResult sellRes, String pair, double originalQty) {
         boolean buyOk = (buyRes != null && buyRes.isFilled());
         boolean sellOk = (sellRes != null && sellRes.isFilled());
-
+        String route = buyEx + "->" + sellEx; // <--- AQUÍ CONSTRUIMOS LA RUTA
+        String asset = pair.replace("USDT", "").replace("-", ""); // Limpiamos "BTCUSDT" a "BTC"
         // A. ÉXITO TOTAL
         if (buyOk && sellOk) {
             double pnl = (sellRes.executedValue()) - (buyRes.executedValue());
-
+        // ✅ BATALLA: VICTORIA
+            DecisionAuditor.log("EXECUTOR", pair, route, 0.0, pnl,
+                    "BATALLA", "VICTORIA", "PnL Real: $" + String.format("%.4f", pnl));
             // Reporte asíncrono
             Thread.ofVirtual().start(() -> riskManager.reportTradeResult(pnl));
 
