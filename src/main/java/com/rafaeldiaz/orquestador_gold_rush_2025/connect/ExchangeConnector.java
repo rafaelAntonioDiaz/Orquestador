@@ -75,25 +75,13 @@ public class ExchangeConnector {
         this.mapper = new ObjectMapper();
         this.envProvider = envProvider;
     }
-
-
-
     // =========================================================================
     // 🔫 2. ÓRDENES DE FUEGO REAL (PLACE & VERIFY) - PRODUCCIÓN
     // =========================================================================
-
-
-
-    /**
-     * Consulta el estado post-mortem de la orden para llenar el certificado.
-     */
     /**
      * Consulta el estado post-mortem de la orden para llenar el certificado.
      * Versión 6.0
      */
-    // =========================================================================
-    // 🕵️ VERIFICACIÓN DE ÓRDENES (POLLING)
-    // =========================================================================
     private com.rafaeldiaz.orquestador_gold_rush_2025.model.OrderResult fetchOrderResult(
             String exchange, String orderId, String pair) {
         // Configuración de Polling
@@ -126,7 +114,8 @@ public class ExchangeConnector {
                                         double fee = Double.parseDouble(order.get("cumExecFee").asText());
                                         double limitPrice = order.has("price") ? Double.parseDouble(order.get("price").asText()) : 0.0;
 
-                                        return new com.rafaeldiaz.orquestador_gold_rush_2025.model.OrderResult(orderId, lastStatus, originalQty, execQty, execValue, limitPrice, fee, "UNK");
+                                        return new com.rafaeldiaz.orquestador_gold_rush_2025.model.OrderResult(
+                                                orderId, lastStatus, originalQty, execQty, execValue, limitPrice, fee, "UNK");
                                     }
                                 }
                             }
@@ -194,18 +183,13 @@ public class ExchangeConnector {
                         }
                     }
                 }
-
-                BotLogger.warn("🔄 Polling orden " + orderId + " (" + (i+1) + "/" + maxRetries + ") Status: " + lastStatus);
                 Thread.sleep(waitTime);
                 waitTime += 10;
                 if (waitTime > 100) waitTime = 100;
-
             } catch (Exception e) {
-                BotLogger.warn("⚠️ Error polling orden " + orderId + ": " + e.getMessage());
                 try { Thread.sleep(50); } catch (InterruptedException ignored) {}
             }
         }
-
         BotLogger.error("❌ TIMEOUT verificando orden " + orderId + ". Último estado: " + lastStatus);
         return new com.rafaeldiaz.orquestador_gold_rush_2025.model.OrderResult(orderId, lastStatus, 0, 0, 0, 0, 0, "NONE");
     }
@@ -446,7 +430,7 @@ public class ExchangeConnector {
             // Usamos executeWithRetry como en su versión vigente
             try (Response response = executeWithRetry(builder.build())) {
                 if (!response.isSuccessful()) {
-                    BotLogger.error("❌ HTTP Error fetching price " + exchange + ": " + response.code());
+                    //BotLogger.error("❌ HTTP Error fetching price " + exchange + ": " + response.code());
                     return 0.0;
                 }
 
@@ -475,7 +459,7 @@ public class ExchangeConnector {
                 return root.get("price").asDouble();
             }
         } catch (Exception e) {
-            BotLogger.error("💥 Excepción en fetchPrice (" + exchange + "): " + e.getMessage());
+            //BotLogger.error("💥 Excepción en fetchPrice (" + exchange + "): " + e.getMessage());
             return 0.0;
         }
     }
@@ -1465,9 +1449,6 @@ public class ExchangeConnector {
                             }
                         }
                     }
-
-                    BotLogger.info("📏 StepSize para " + pair
-                            + " en " + exchange + ": " + String.format("%.8f", stepSize));
                     stepSizeCache.put(key, stepSize);
                     return stepSize;
                 }

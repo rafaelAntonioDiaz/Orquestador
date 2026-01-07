@@ -292,23 +292,19 @@ public class DeepMarketScanner implements MarketListener {
         dashboard.addLog("🎯 RADAR ACTUALIZADO: " + huntingGrounds.size() + " Activos");
     }
 
-    // Formato visual de tablas idéntico al v3.1
-    private void printHeader() {
-        System.out.println("\n╔══════════╦════════╦═══════════════╦═══════╦════════╦════════╦════════════╗\n║   HORA   ║ ACTIVO ║     RUTA      ║ CAP($)║ GAP(%) ║ T.FEES ║  NETO($)   ║\n╠══════════╬════════╬═══════════════╬═══════╬════════╬════════╬════════════╣");
-    }
-
     private void printFormattedLog(ArbitrageOpportunity opp) {
-        String time = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"));
-        String route = opp.strategyType().contains("TRIANGULAR")
-                ? "⚡ " + opp.asset() + "-" + opp.sellExchange()
-                : opp.buyExchange().substring(0,3) + "->" + opp.sellExchange().substring(0,3);
-
-        // Icono basado en fuente
-        String icon = opp.signalSource().equals("HARD_MATH") ? "💎" : "🔮";
+        // Formato Estandarizado [INFO] - Fácil de leer para humanos y parsers
+        // Ejemplo: ORDER_FILLED | WIF/USDT | Spread: 1.2% | PnL: $0.45 | Src: ORACLE
 
         BotLogger.info(String.format(java.util.Locale.US,
-                "║ %s ║ %-6s ║ %-13s ║ %5s ║ %6.2f ║ %s %6.2f ║ Source: %s",
-                time, opp.asset(), route, "VAR", opp.grossSpreadPct()*100, icon, opp.expectedProfit(), opp.signalSource()));
+                "⚡ MATCH_FOUND | %s | %s -> %s | Spread: %.2f%% | Est.PnL: $%.4f | Src: %s",
+                opp.asset(),
+                opp.buyExchange(),
+                opp.sellExchange(),
+                opp.grossSpreadPct() * 100,
+                opp.expectedProfit(),
+                opp.signalSource()
+        ));
     }
 
     private void sendTelegramReport() {
@@ -388,29 +384,16 @@ public class DeepMarketScanner implements MarketListener {
             // configurarse con un umbral base bajo (ej. 0.0005) y filtramos AQUI.
 
             List<ArbitrageOpportunity> opps = strategy.findOpportunities(asset, prices);
-            if (BotConfig.DRY_RUN && !opps.isEmpty()) {
-                BotLogger.info(String.format(
-                        "🔍 RAW DETECTION: %s found %d opportunities (spreads: %.3f%% - %.3f%%)",
-                        asset, opps.size(),
-                        opps.stream().mapToDouble(o -> o.grossSpreadPct()*100).min().orElse(0),
-                        opps.stream().mapToDouble(o -> o.grossSpreadPct()*100).max().orElse(0)
-                ));
-            }
 
             for (ArbitrageOpportunity opp : opps) {
                 // 2. CONSULTA AL ORÁCULO
                 String targetEx = opp.buyExchange().equals(BotConfig.ADVISOR_REF_EXCHANGE)
                         ? opp.sellExchange()
                         : opp.buyExchange();
-                var verdict = oracle.getVerdict(asset, opp.grossSpreadPct(), targetEx);
 
                 // 3. FILTRADO DINÁMICO
                 // Si el spread es menor al sugerido por el oráculo, descartamos.
-
-                    if (opp.grossSpreadPct() < verdict.suggestedThreshold()) {
-                        dashboard.addLog("🚫 REJECTED: " + asset + " Spread: " + String.format("%.3f", opp.grossSpreadPct()*100) + "% < Req: " + String.format("%.3f", verdict.suggestedThreshold()*100) + "%");
-                        continue;
-                    }
+                var verdict = oracle.getVerdict(asset, opp.grossSpreadPct(), targetEx);
 
                 // 4. ENRIQUECIMIENTO DEL MODELO
                 // Creamos una nueva instancia del record con los datos del oráculo
@@ -454,14 +437,5 @@ public class DeepMarketScanner implements MarketListener {
         dashboard.updateNetwork(networkLatencies);
         dashboard.updateStats(cyclesCount.get(), totalPotentialProfit.sum());
         dashboard.generate(); // Escribe dashboard.html
-
-        // 2. CONSOLA ZEN: Una sola línea que se actualiza (Heartbeat)
-        // Usamos "\r" para volver al inicio de la línea y sobreescribir
-        long latBinance = networkLatencies.getOrDefault("binance", 0L);
-
-        System.out.print("\r⏳ CICLOS: " + cyclesCount.get() +
-                " | 💰 PnL: $" + String.format("%.2f", totalPotentialProfit.sum()) +
-                " | 📡 RED: " + latBinance + "ms" +
-                " | 🛡️ ESTADO: CAZANDO...        ");
-        // Los espacios al final son para limpiar residuos de texto anterior
-    }}
+    }
+}

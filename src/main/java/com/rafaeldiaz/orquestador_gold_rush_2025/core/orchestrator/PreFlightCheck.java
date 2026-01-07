@@ -7,97 +7,94 @@ import okhttp3.Request;
 import okio.Buffer;
 
 import java.io.IOException;
-import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
 
 /**
- * 🛫 PRE-FLIGHT CHECK SYSTEM
- * Autoridad final de despegue. Ejecuta validaciones críticas de integridad,
- * riesgo y protocolo antes de permitir la conexión a los mercados.
+ * 🛫 PRE-FLIGHT CHECK SYSTEM (SILENT MODE - JAVA 25 CERTIFIED)
+ * Autoridad final de despegue.
+ * Política: Silencio total a menos que exista un riesgo operativo crítico.
  */
 public class PreFlightCheck {
 
     public static void runSequence(ExchangeConnector connector, RiskManager riskManager) {
-        BotLogger.info("🛫 INICIANDO SECUENCIA DE PRE-VUELO (PRE-FLIGHT CHECK)...");
+        // Único aviso de actividad
+        BotLogger.info("🛡️ SYSTEM CHECK: Validando integridad, FOK y modelos de riesgo...");
 
         try {
-            // 1. CHEQUEO DE HARDWARE & JVM
+            // 1. CHEQUEO DE VERSIÓN JAVA (Crítico para Virtual Threads)
             checkSystemSpecs();
 
-            // 2. CHEQUEO DE INTEGRIDAD DE PROTOCOLO (FOK)
+            // 2. CHEQUEO DE PROTOCOLO FOK (Crítico para evitar órdenes limitadas colgadas)
             checkFokProtocolIntegrity(connector);
 
-            // 3. CHEQUEO MATEMÁTICO (Monte Carlo)
+            // 3. CHEQUEO MATEMÁTICO MONTE CARLO (Crítico para preservación de capital)
             checkRiskModels(riskManager);
 
-            // 4. CHEQUEO DE LATENCIA DE RED (Ping rápido)
+            // 4. CHEQUEO DE CONECTIVIDAD Y LATENCIA
             checkNetworkHealth(connector);
 
-            BotLogger.info(BotLogger.GREEN + "✅ TODOS LOS SISTEMAS NOMINALES. AUTORIZADO PARA DESPEGUE." + BotLogger.RESET);
+            // Si el código llega aquí, todos los sistemas están verdes.
+            BotLogger.info("✅ PRE-FLIGHT: PASSED. Sistemas Nominales.");
 
         } catch (Exception e) {
-            BotLogger.error(BotLogger.RED + "🛑 ABORTANDO INICIO: " + e.getMessage() + BotLogger.RESET);
-            BotLogger.error("⚠️ Corrija el fallo crítico antes de reiniciar.");
-            System.exit(1); // Muerte súbita del proceso (Safety First)
+            BotLogger.error("🔥 FALLO DE PRE-VUELO: " + e.getMessage());
+            System.exit(1);
         }
     }
 
     // -------------------------------------------------------------------------
-    // 1. 🖥️ SYSTEM SPECS (Java 25 Ready?)
+    // 1. 🖥️ SYSTEM SPECS CHECK (JAVA 25 ENFORCED)
     // -------------------------------------------------------------------------
     private static void checkSystemSpecs() {
         String javaVersion = System.getProperty("java.version");
-        int cores = Runtime.getRuntime().availableProcessors();
-        long memory = Runtime.getRuntime().maxMemory() / (1024 * 1024);
 
-        BotLogger.info(String.format("🖥️ [SYS] Java: %s | Cores: %d | Heap: %d MB", javaVersion, cores, memory));
+        // LISTA BLANCA EXPLÍCITA:
+        // Incluimos "25" explícitamente para soportar "25-ea" o "25-beta"
+        // sin que fallen en el parseo numérico.
+        boolean isSupported = javaVersion.startsWith("21") ||
+                javaVersion.startsWith("22") ||
+                javaVersion.startsWith("23") ||
+                javaVersion.startsWith("24") ||
+                javaVersion.startsWith("25"); // <--- ¡AQUÍ ESTÁ!
 
-        // Validación estricta para Virtual Threads
-        if (!javaVersion.startsWith("21") && !javaVersion.startsWith("22") && !javaVersion.startsWith("23") && !javaVersion.startsWith("24") && !javaVersion.startsWith("25")) {
-            // Permitimos 21+ pero advertimos si no es 25
-            if (Integer.parseInt(javaVersion.split("\\.")[0]) < 21) {
-                throw new RuntimeException("Requisito de Sistema no cumplido: Se requiere Java 21+ para Virtual Threads.");
+        if (!isSupported) {
+            // Fallback para versiones futuras (ej. Java 26) o formatos numéricos puros
+            try {
+                // Usamos split regex para manejar "26.0.1" (dot) o "26-ea" (dash) si fuera necesario
+                String majorStr = javaVersion.split("[.-]")[0];
+                int major = Integer.parseInt(majorStr);
+
+                if (major < 21) {
+                    throw new RuntimeException("Requisito fallido: Java 21+ requerido. Detectado: " + javaVersion);
+                }
+            } catch (NumberFormatException e) {
+                // Si no empieza por 21-25 y no es un número parseable, es un riesgo.
+                throw new RuntimeException("Versión de Java no reconocida/soportada: " + javaVersion);
             }
         }
     }
 
     // -------------------------------------------------------------------------
-    // 2. 🔐 FOK PROTOCOL INTEGRITY (El que diseñamos en el Test)
+    // 2. 🔐 FOK PROTOCOL INTEGRITY CHECK
     // -------------------------------------------------------------------------
     private static void checkFokProtocolIntegrity(ExchangeConnector connector) throws IOException {
-        BotLogger.info("🔐 [PROTO] Verificando construcción de órdenes Fill-or-Kill...");
-
-        // A. Simulación BYBIT
+        // A. Validación Bybit (FOK en JSON body)
         Request reqBybit = connector.buildOrderRequest("bybit", "BTC-USDT", "BUY", "LIMIT_FOK", 1.0, 50000.0);
-        String bodyBybit = bodyToString(reqBybit);
-        if (!bodyBybit.contains("\"timeInForce\": \"FOK\"")) {
-            throw new RuntimeException("FALLO CRÍTICO FOK: Bybit Connector no está inyectando el flag FOK en el JSON.");
+        if (!bodyToString(reqBybit).contains("\"timeInForce\": \"FOK\"")) {
+            throw new RuntimeException("CRITICAL: El conector de Bybit no está inyectando el flag 'FOK'.");
         }
 
-        // B. Simulación BINANCE
+        // B. Validación Binance (FOK en URL Params)
         Request reqBinance = connector.buildOrderRequest("binance", "BTC-USDT", "BUY", "LIMIT_FOK", 1.0, 50000.0);
-        String urlBinance = reqBinance.url().toString();
-        if (!urlBinance.contains("timeInForce=FOK")) {
-            throw new RuntimeException("FALLO CRÍTICO FOK: Binance Connector no está inyectando el flag FOK en la URL.");
+        if (!reqBinance.url().toString().contains("timeInForce=FOK")) {
+            throw new RuntimeException("CRITICAL: El conector de Binance no está inyectando el flag 'FOK'.");
         }
-
-        BotLogger.info("✅ [PROTO] Integridad FOK confirmada en constructores.");
     }
 
     // -------------------------------------------------------------------------
-    // 3. 🎲 RISK MODEL (Monte Carlo en el arranque)
-    // -------------------------------------------------------------------------
-// -------------------------------------------------------------------------
-    // 3. 🎲 RISK MODEL (Monte Carlo en el arranque)
+    // 3. 🎲 RISK MODEL CHECK (Monte Carlo)
     // -------------------------------------------------------------------------
     private static void checkRiskModels(RiskManager riskManager) {
-        BotLogger.info("🎲 [RISK] Ejecutando Simulación de Monte Carlo (Perfil Configurado)...");
-        BotLogger.info(String.format("   -> Target WinRate: %.0f%% | AvgWin: $%.2f | AvgLoss: $%.2f",
-                BotConfig.RISK_SIM_WIN_RATE * 100,
-                BotConfig.RISK_SIM_AVG_WIN,
-                BotConfig.RISK_SIM_AVG_LOSS));
-
-        // ✅ CORRECCIÓN: Usando variables de entorno, no números mágicos
         boolean passed = riskManager.runMonteCarloSimulation(
                 BotConfig.RISK_SIM_WIN_RATE,
                 BotConfig.RISK_SIM_AVG_WIN,
@@ -105,32 +102,28 @@ public class PreFlightCheck {
         );
 
         if (!passed) {
-            throw new RuntimeException("RIESGO INACEPTABLE: Monte Carlo predice ruina > " + (BotConfig.RISK_MC_RUIN_THRESHOLD * 100) + "%.");
+            throw new RuntimeException("RIESGO ALTO: La simulación de Monte Carlo predice ruina > " +
+                    (BotConfig.RISK_MC_RUIN_THRESHOLD * 100) + "%. Ajuste parámetros.");
         }
-        BotLogger.info("✅ [RISK] Modelos matemáticos estables.");
     }
+
     // -------------------------------------------------------------------------
-    // 4. 🌐 NETWORK LATENCY
+    // 4. 🌐 NETWORK LATENCY CHECK
     // -------------------------------------------------------------------------
     private static void checkNetworkHealth(ExchangeConnector connector) {
         long start = System.currentTimeMillis();
         try {
-            // Ping simple a Binance (suele ser la referencia)
             connector.fetchPrice("binance", "BTC-USDT");
             long rtt = System.currentTimeMillis() - start;
 
-            BotLogger.info("🌐 [NET] Latencia de arranque: " + rtt + "ms");
-
             if (rtt > 1000) {
-                BotLogger.warn("⚠️ [NET] Latencia alta detectada en arranque (>1000ms). Operación riesgosa.");
-                // Opcional: throw new RuntimeException("Latencia inaceptable para HFT");
+                BotLogger.warn("⚠️ NETWORK LAG: Latencia de arranque alta (" + rtt + "ms). Riesgo de slippage.");
             }
         } catch (Exception e) {
-            throw new RuntimeException("SIN CONEXIÓN: No se pudo contactar con los exchanges.");
+            throw new RuntimeException("NETWORK DOWN: No se pudo conectar a los exchanges.");
         }
     }
 
-    // Helper para leer body sin consumir memoria excesiva
     private static String bodyToString(Request request) throws IOException {
         if (request.body() == null) return "";
         Buffer buffer = new Buffer();

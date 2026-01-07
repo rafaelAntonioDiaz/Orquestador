@@ -103,7 +103,6 @@ public class DynamicPairSelector {
     // 📡 RUTINA 2: RADAR (Inteligencia de Mercado)
     // =========================================================================
     private void executeRadarRoutine() {
-        BotLogger.info("🔭 RADAR: Escaneando Universo (" + CANDIDATE_PAIRS.size() + " activos)...");
         long start = System.currentTimeMillis();
 
         // 🚀 STRUCTURED CONCURRENCY (Implicit Scope)
@@ -148,7 +147,11 @@ public class DynamicPairSelector {
         } catch (Exception e) {
             BotLogger.error("🔭 Error en Radar: " + e.getMessage());
         } finally {
-            BotLogger.info("⏱️ Radar finalizado en " + (System.currentTimeMillis() - start) + "ms");
+            long duration = System.currentTimeMillis() - start;
+            if (duration > 2000) {
+                // Solo avisa si el radar se demora más de 2 segundos (algo va mal)
+                BotLogger.warn("⚠️ RADAR LENTO: Tomó " + duration + "ms");
+            }
         }
     }
 
@@ -216,17 +219,18 @@ public class DynamicPairSelector {
         }
     }
     private void logIntelligenceReport(List<OpportunityScore> top) {
-        StringBuilder sb = new StringBuilder("\n📡 RADAR DE OPORTUNIDADES (Para Humano):\n");
         if (top.isEmpty()) {
-            sb.append("   (El mercado está dormido, sin candidatos claros)\n");
-        } else {
-            for (int i = 0; i < top.size(); i++) {
-                OpportunityScore s = top.get(i);
-                sb.append(String.format("   💡 #%d %-8s | Score: %4.2f | Spread: %5.2f%% | Vol: %4.2f%%\n",
-                        i + 1, s.pair, s.score, s.spreadPercent, s.atrPercent));
-            }
-            sb.append("\n   👉 Si inyectas saldo en estos activos, el Watchdog los activará en 30s.\n");
+            return;
         }
+        StringBuilder sb = new StringBuilder("\n📡 RADAR DE OPORTUNIDADES:\n");
+        for (int i = 0; i < top.size(); i++) {
+            OpportunityScore s = top.get(i);
+            sb.append(String.format("   💡 #%d %-8s | Score: %4.2f | Spread: %5.2f%% | Vol: %4.2f%%\n",
+                    i + 1, s.pair, s.score, s.spreadPercent, s.atrPercent));
+        }
+        // Solo sugerimos acción si hay data real
+        sb.append(" Si inyectas saldo en estos activos, se activará en segundos.\n");
+
         BotLogger.info(sb.toString());
     }
 

@@ -31,38 +31,28 @@ public class GoldRushOrchestrator {
         this.connector = connector;
         this.coordinator = coordinator;
 
-        BotLogger.info("🏗️ DIRECTOR: Ensamblando departamentos...");
-
         // 1. Departamento de Riesgo
         this.riskManager = new RiskManager(BotConfig.SEED_CAPITAL, coordinator);
-
         // 2. Departamento Financiero (CFO)
         this.cfo = new PortfolioHealthManager(connector);
-
         // 3. Departamento de Inteligencia (Cerebro)
         this.scanner = new DeepMarketScanner(connector, coordinator);
         this.scanner.injectCFO(cfo);
         this.scanner.setDryRun(BotConfig.DRY_RUN);
     }
-
     /**
      * 🚀 INICIA LA MISIÓN
      * Ejecuta PreFlightCheck -> Arranca Scanner -> Espera -> Apaga.
      */
     public void startMission() {
         try {
-            BotLogger.info("======================================================");
-            BotLogger.info("🎼 DIRECTOR: Iniciando Protocolo de Despegue...");
-
             // =================================================================
             // 🛫 PASO 1: PRE-FLIGHT CHECK (AUTORIDAD FINAL)
             // =================================================================
             // Validamos Java, Integridad FOK, Monte Carlo y Red.
             // Si esto falla, PreFlightCheck ejecutará System.exit(1).
             PreFlightCheck.runSequence(this.connector, this.riskManager);
-
-            BotLogger.info("✅ DIRECTOR: Autorización de Torre recibida. Despegando.");
-
+            BotLogger.info("✅ SYSTEM OPERATIONAL. T-0: Liftoff.");
             // =================================================================
             // 🚀 PASO 2: ACTIVACIÓN DE MOTORES
             // =================================================================
@@ -114,8 +104,6 @@ public class GoldRushOrchestrator {
         String endReport = String.format("MISSION_END | PnL: $%.2f | Trades: %d", totalPnL, totalTrades);
         BotLogger.logSystemEvent("MISSION_END", endReport);
         BotLogger.sendTelegram("🏁 FIN DE MISIÓN\n" + endReport);
-
-        BotLogger.info("👋 DIRECTOR: JVM lista para salir. Cambio y fuera.");
         missionLatch.countDown();
     }
 
