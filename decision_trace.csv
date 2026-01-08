@@ -1403,3 +1403,9 @@ HORA,ESTRATEGIA,ACTIVO,RUTA,SPREAD_RAW,PNL_EST,ETAPA,ESTADO,DETALLE
 20:42:55.648,Spatial-Adaptive-v2.0,WIF,mexc->bybit_sub1,0,0254%,0,0000,RADAR,RECHAZADO,Spread menor a umbral adaptativo
 20:43:05.005,Spatial-Adaptive-v2.0,WIF,mexc->bybit_sub1,0,0254%,0,0000,RADAR,RECHAZADO,Spread menor a umbral adaptativo
 20:43:14.073,Spatial-Adaptive-v2.0,WIF,mexc->bybit_sub1,0,0254%,0,0000,RADAR,RECHAZADO,Spread menor a umbral adaptativo
+20:46:05.866,Spatial-Adaptive-v2.0,BTC,binance->kucoin,2,0000%,0,0000,RADAR,CANDIDATO,Detectado por Adaptive Logic
+20:46:05.872,Spatial-Adaptive-v2.0,BTC,binance->kucoin,0,0010%,0,0000,RADAR,RECHAZADO,Spread menor a umbral adaptativo
+20:46:11.180,Spatial-Adaptive-v2.0,WIF,mexc->bybit,2,5000%,0,0000,RADAR,CANDIDATO,Detectado por Adaptive Logic
+20:58:07.529,Spatial-Adaptive-v2.0,BTC,binance->kucoin,2,0000%,0,0000,RADAR,CANDIDATO,Detectado por Adaptive Logic
+20:58:07.533,Spatial-Adaptive-v2.0,BTC,binance->kucoin,0,0010%,0,0000,RADAR,RECHAZADO,Spread menor a umbral adaptativo
+20:58:12.120,Spatial-Adaptive-v2.0,WIF,mexc->bybit,2,5000%,0,0000,RADAR,CANDIDATO,Detectado por Adaptive Logic

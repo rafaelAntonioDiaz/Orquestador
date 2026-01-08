@@ -1,0 +1,10 @@
+{
+  "date" : "2026-01-07",
+  "currentCapital" : 2000.0,
+  "initialDailyCapital" : 1000.0,
+  "peakCapital" : 2000.0,
+  "dailyPnL" : 1000.0,
+  "status" : "OPERATIONAL",
+  "consecutiveLosses" : 0,
+  "pauseUntilTimestamp" : 0
+}

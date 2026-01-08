@@ -72,10 +72,14 @@ class DeepMarketScannerSpatialTest {
         mocks = MockitoAnnotations.openMocks(this);
 
         // 1. CONFIGURACIÓN DEL ENTORNO
-        mockedConfig.when(BotConfig::isSpatialStrategy).thenReturn(true);
-        mockedConfig.when(BotConfig::getActiveExchanges).thenReturn(List.of(BUY_EXCHANGE, SELL_EXCHANGE));
-        mockedConfig.when(BotConfig::getMinScanSpread).thenReturn(0.001);
-        mockedConfig.when(BotConfig::getMaxLatencyMs).thenReturn(100.0);
+        mockedConfig.when(BotConfig::isSpatialStrategy).
+                thenReturn(true);
+        mockedConfig.when(BotConfig::getActiveExchanges).
+                thenReturn(List.of(BUY_EXCHANGE, SELL_EXCHANGE));
+        mockedConfig.when(BotConfig::getAdvisorRefExchange).
+                thenReturn(BUY_EXCHANGE);
+        mockedConfig.when(BotConfig::getMaxLatencyMs).
+                thenReturn(100.0);
 
         // 2. Mocks del Connector
         lenient().when(mockConnector.getStepSize(anyString(), anyString())).thenReturn(0.01);

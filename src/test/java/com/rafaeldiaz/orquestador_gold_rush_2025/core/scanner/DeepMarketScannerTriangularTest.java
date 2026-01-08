@@ -61,8 +61,7 @@ class DeepMarketScannerTriangularTest {
         // 1. CONFIG
         mockedConfig.when(BotConfig::isSpatialStrategy).thenReturn(false);
         mockedConfig.when(BotConfig::getActiveExchanges).thenReturn(List.of(EXCHANGE));
-        // Nota: Ya no nos importa getBridgeAssets porque usaremos estrategia mockeada
-
+        mockedConfig.when(BotConfig::getAdvisorRefExchange).thenReturn(EXCHANGE);
         // 2. Mocks Base
         lenient().when(mockConnector.getStepSize(anyString(), anyString())).thenReturn(0.01);
         lenient().when(mockFeeManager.getTradingFee(anyString(), anyString(), anyString())).thenReturn(0.001);
