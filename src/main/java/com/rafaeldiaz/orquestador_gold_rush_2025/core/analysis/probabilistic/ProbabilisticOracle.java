@@ -15,17 +15,20 @@ public class ProbabilisticOracle {
     public ProbabilisticOracle(MarketCortex cortex) {
         this.cortex = cortex;
         // Definición dinámica del líder desde .env
-        String envAdvisor = BotConfig.ADVISOR_REF_EXCHANGE;
+        // USO DE GETTER (Testable)
+        String envAdvisor = BotConfig.getAdvisorRefExchange();
         this.LEADER_EXCHANGE = (envAdvisor != null && !envAdvisor.isBlank())
                 ? envAdvisor.toLowerCase()
                 : "binance";
         BotLogger.info("🔮 ORACLE: Advisor configurado -> " + LEADER_EXCHANGE.toUpperCase());
     }
 
-    public OracleVerdict getVerdict(String asset, double currentSpread, String targetExchange) {
+    public Verdict getVerdict(String asset, double currentSpread, String targetExchange) {
+        // USO DE GETTER (Testable)
+        int ticks = BotConfig.getOracleLeadLagTicks();
         // 1. ANÁLISIS LEAD-LAG
-        double leaderVel = cortex.getPriceVelocity(asset, LEADER_EXCHANGE, BotConfig.ORACLE_LEAD_LAG_TICKS);
-        double followerVel = cortex.getPriceVelocity(asset, targetExchange, BotConfig.ORACLE_LEAD_LAG_TICKS);
+        double leaderVel = cortex.getPriceVelocity(asset, LEADER_EXCHANGE, ticks);
+        double followerVel = cortex.getPriceVelocity(asset, targetExchange, ticks);
 
         // Señal: Líder se mueve rápido (>0.15%) y Seguidor está quieto (<0.05%)
         // Nota: Umbrales de velocidad hardcodeados como "constantes físicas" por ahora,
@@ -39,25 +42,20 @@ public class ProbabilisticOracle {
         cortex.recordSpread(asset, currentSpread);
         double zScore = cortex.getSpreadZScore(asset, currentSpread);
 
-        if (zScore > BotConfig.ORACLE_Z_SCORE_THRESHOLD) {
+        // USO DE GETTER (Testable)
+        if (zScore > BotConfig.getOracleZScoreThreshold()) {
             confidence = Math.max(confidence, 0.75);
             source = source.equals("NONE") ? "MEAN_REV" : source + "+MEAN_REV";
         }
 
         // 3. DECISIÓN DE UMBRAL (Dynamic Thresholding)
-        double suggestedThreshold = BotConfig.MIN_SCAN_SPREAD; // Default (0.30% o lo que sea)
-
-        if (confidence >= BotConfig.ORACLE_MIN_CONFIDENCE) {
+        // USO DE GETTER (Testable)
+        double suggestedThreshold = BotConfig.getMinScanSpread();
+        if (confidence >= BotConfig.getOracleMinConfidence()) {
             // Si hay alta confianza, permitimos spread agresivo (ej. 0.10%)
-            suggestedThreshold = BotConfig.ORACLE_AGGRESSIVE_SPREAD;
+            suggestedThreshold = BotConfig.getOracleAggressiveSpread();
         }
 
-        return new OracleVerdict(confidence, suggestedThreshold, source);
+        return new Verdict(source, confidence, suggestedThreshold);
     }
-
-    public record OracleVerdict(
-            double confidenceScore,
-            double suggestedThreshold,
-            String signalSource
-    ) {}
 }

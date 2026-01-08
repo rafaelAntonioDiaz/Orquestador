@@ -38,7 +38,7 @@ public class StandardProfitEstimator implements ProfitEstimator {
 
         // 1. Check Balance
         double availableBalance = balances.getAvailableBalance(rawOpp.buyExchange(), quoteCurrency);
-        if (availableBalance < BotConfig.MIN_ASSET_VALUE_USDT) return null;
+        if (availableBalance < BotConfig.getMinAssetValueUsdt()) return null;
 
         // 2. Fetch Books
         String pair = rawOpp.asset() + quoteCurrency;

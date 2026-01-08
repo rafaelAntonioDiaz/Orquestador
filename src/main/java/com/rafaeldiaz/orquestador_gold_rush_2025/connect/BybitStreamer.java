@@ -105,6 +105,11 @@ public class BybitStreamer extends MarketStreamer implements MarketListener { //
         // Si no hubo cambios, no hacemos nada (Eficiencia Zen)
     }
 
+    @Override
+    public void reportRadarDetection(String symbol, double score, double spreadPct, double volatility) {
+
+    }
+
     // =========================================================================
     // ⚡ MÉTODOS DEL CONTRATO ORIGINAL (INTACTOS)
     // =========================================================================

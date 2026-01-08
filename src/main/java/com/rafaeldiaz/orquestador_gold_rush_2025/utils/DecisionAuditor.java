@@ -1,5 +1,7 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025.utils;
 
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.telemetry.DashboardService;
+
 import java.io.BufferedWriter;
 import java.io.FileWriter;
 import java.io.File;
@@ -18,7 +20,7 @@ public class DecisionAuditor {
     private static final BlockingQueue<String> logQueue = new LinkedBlockingQueue<>();
     private static final DateTimeFormatter timeFmt = DateTimeFormatter.ofPattern("HH:mm:ss.SSS");
     private static final String FILE_NAME = "decision_trace.csv";
-
+    private static DashboardService dashboard;
     static {
         // Hilo Virtual dedicado a I/O (Fire-and-Forget)
         Thread.ofVirtual().name("Auditor-Writer").start(() -> {
@@ -39,30 +41,28 @@ public class DecisionAuditor {
             }
         });
     }
-
+    public static void setDashboard(DashboardService ds) { dashboard = ds; }
     /**
      * Toma la instantánea.
      * @param spreadRaw Spread en decimal (ej: 0.005 para 0.5%)
      */
-    public static void log(String strategy, String asset, String route, double spreadRaw, double pnlEstimated,
-                           String stage, String status, String detail) {
 
-        // FILTRO DE RUIDO: Solo registramos si hay un spread matemático positivo.
-        // Ignoramos el ruido de mercado plano (<=0) para no llenar el disco.
+
+    public static void log(String strategy, String asset, String route, double spreadRaw,
+                           double pnlEstimated, String stage, String status, String detail) {
+
         if (spreadRaw <= 0) return;
 
+        // 1. Log existente al CSV (Async I/O)
         String line = String.format("%s,%s,%s,%s,%.4f%%,%.4f,%s,%s,%s",
-                LocalTime.now().format(timeFmt),
-                strategy,
-                asset,
-                route,
-                spreadRaw * 100,      // % Legible
-                pnlEstimated,         // $ Estimado
-                stage,                // ESTRATEGIA, FINANCIERO, EJECUCION, BATALLA
-                status,               // CANDIDATO, RECHAZADO, EXITO, PATA_ROTA
-                detail.replace(",", ";") // Sanitizar comas
+                LocalTime.now().format(timeFmt), strategy, asset, route,
+                spreadRaw * 100, pnlEstimated, stage, status, detail.replace(",", ";")
         );
-
         logQueue.offer(line);
+
+        // 2. NUEVO: Log en vivo al Dashboard
+        if (dashboard != null) {
+            dashboard.registrarTrazaDecision(asset, stage, status, detail, spreadRaw * 100);
+        }
     }
 }

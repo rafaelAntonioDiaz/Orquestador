@@ -8,21 +8,20 @@
     <style>
         :root { --bg: #050505; --card: #111; --text: #ccc; --accent: #00ff9d; --danger: #ff0055; --warning: #ffcc00; --info: #00d2ff; --muted: #666; }
         body { background: var(--bg); color: var(--text); font-family: 'Consolas', 'Courier New', monospace; margin: 0; padding: 15px; font-size: 12px; }
-
-        /* Layout Principal */
         .header { display: flex; justify-content: space-between; border-bottom: 2px solid var(--accent); padding-bottom: 10px; margin-bottom: 15px; align-items: center; }
         .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 15px; }
         .card { background: var(--card); border: 1px solid #222; padding: 12px; border-radius: 4px; }
-
-        /* KPIs */
         .kpi { font-size: 28px; font-weight: bold; color: #fff; }
         .kpi-label { font-size: 10px; text-transform: uppercase; color: var(--muted); margin-bottom: 5px; letter-spacing: 1px; }
-
-        /* Tablas */
         table { width: 100%; border-collapse: collapse; font-size: 11px; }
         td, th { padding: 3px 5px; border-bottom: 1px solid #222; text-align: left; }
 
-        /* Config Grid Styles (NUEVO) */
+        /* Nuevos Estilos Radar */
+        .radar-score-high { color: var(--danger); font-weight: bold; animation: pulse 2s infinite; }
+        .radar-score-med { color: var(--warning); }
+        .radar-spread { color: var(--accent); font-family: monospace; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.7; } 100% { opacity: 1; } }
+
         .cfg-section-title { color: var(--warning); font-size: 11px; border-bottom: 1px solid #333; margin-bottom: 8px; padding-bottom: 2px; text-transform: uppercase; }
         .cfg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; margin-top: 5px; }
         .cfg-card { background: #0a0a0a; border: 1px solid #333; padding: 8px; border-radius: 3px; }
@@ -32,13 +31,7 @@
         .val-true { color: var(--accent); }
         .val-false { color: var(--danger); }
         .val-num { color: #58a6ff; }
-
-        /* Utilidades */
         .alert-fill { color: var(--danger); font-weight: bold; animation: blink 1s infinite; }
-        .blink { animation: blink-red 1s infinite; }
-        @keyframes blink-red { 50% { opacity: 0.5; } }
-
-        /* Scrollbars */
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: #000; }
         ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
@@ -52,25 +45,35 @@
         </div>
         <div style="text-align: right;">
             <div style="font-size: 10px; color: var(--muted);">UPTIME</div>
-            <div style="color: #fff;">16:41:17</div>
+            <div style="color: #fff;">20:43:14</div>
         </div>
     </div>
 
     <div class="grid">
         <div class="card" style="grid-row: span 2;">
             <div class="kpi-label">💰 BÓVEDA (INVENTARIO)</div>
-            <div style="max-height: 380px; overflow-y: auto;"></div>
+            <div style="max-height: 380px; overflow-y: auto;"><table style='table-layout: fixed; width: 100%;'><colgroup><col style='width: 40%;'><col style='width: 20%;'><col style='width: 40%;'></colgroup><tr style='color:var(--accent); font-size:10px;'><th>EXCHANGE</th><th>ASSET</th><th style='text-align:right'>QTY</th></tr><tr><td style='color:#666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;'>KUCOIN</td><td style='font-weight:bold'>IMX</td><td style='text-align:right; color:#fff; font-family: monospace;'>86,5950</td></tr><tr><td style='color:#666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;'>KUCOIN</td><td style='font-weight:bold'>USDT</td><td style='text-align:right; color:#fff; font-family: monospace;'>57,5480</td></tr><tr><td style='color:#666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;'>BINANCE</td><td style='font-weight:bold'>BNB</td><td style='text-align:right; color:#fff; font-family: monospace;'>0,0079</td></tr><tr><td style='color:#666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;'>BINANCE</td><td style='font-weight:bold'>USDT</td><td style='text-align:right; color:#fff; font-family: monospace;'>79,7839</td></tr><tr><td style='color:#666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;'>BYBIT_SUB1</td><td style='font-weight:bold'>WIF</td><td style='text-align:right; color:#fff; font-family: monospace;'>62,9070</td></tr><tr><td style='color:#666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;'>BYBIT_SUB1</td><td style='font-weight:bold'>USDT</td><td style='text-align:right; color:#fff; font-family: monospace;'>70,1179</td></tr><tr><td style='color:#666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;'>MEXC</td><td style='font-weight:bold'>WIF</td><td style='text-align:right; color:#fff; font-family: monospace;'>62,4300</td></tr><tr><td style='color:#666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;'>MEXC</td><td style='font-weight:bold'>USDT</td><td style='text-align:right; color:#fff; font-family: monospace;'>70,1241</td></tr><tr><td style='color:#666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;'>MEXC</td><td style='font-weight:bold'>MX</td><td style='text-align:right; color:#fff; font-family: monospace;'>2,4000</td></tr></table></div>
+        </div>
+
+        <div class="card" style="grid-row: span 2;">
+            <div class="kpi-label">🔥 MERCADOS CALIENTES (RADAR)</div>
+            <div style="max-height: 380px; overflow-y: auto;">
+                <table style="width:100%">
+                    <tr style="color:#666"><th>PAIR</th><th>SCORE</th><th>SPREAD</th><th>STATUS</th></tr>
+                    <tr><td style='font-weight:bold; color:#fff'>PEPEUSDT</td><td class='radar-score-med'>0,22</td><td class='radar-spread'>0,15%</td><td style='color:#777; font-size:10px'>👀 RADAR</td></tr>
+                </table>
+            </div>
         </div>
 
         <div class="card">
             <div class="kpi-label">PROFIT & LOSS (ESTIMADO)</div>
             <div class="kpi" style="color: #00ff9d">$0,0000</div>
-            <div style="font-size:10px; color:#666; margin-top:5px;">CYCLES: 0</div>
+            <div style="font-size:10px; color:#666; margin-top:5px;">CYCLES: 18</div>
         </div>
 
         <div class="card">
             <div class="kpi-label">LATENCIA RED (MS)</div>
-            <table></table>
+            <table><tr><td>MEXC</td><td style='color:#ff0055'>288 ms</td></tr><tr><td>BYBIT_SUB1</td><td style='color:#ff0055'>341 ms</td></tr><tr><td>BYBIT_SUB2</td><td style='color:#ff0055'>314 ms</td></tr><tr><td>BYBIT_SUB3</td><td style='color:#ff0055'>346 ms</td></tr><tr><td>BINANCE</td><td style='color:#ff0055'>662 ms</td></tr><tr><td>OKX</td><td style='color:#ff0055'>297 ms</td></tr><tr><td>KUCOIN</td><td style='color:#ff0055'>276 ms</td></tr></table>
         </div>
 
         <div class="card" style="grid-column: span 2; height: 250px;">
@@ -79,110 +82,77 @@
         </div>
 
         <div class="card" style="grid-column: span 1; height: 250px;">
-            <div class="kpi-label">🌪️ EMBUDO DE EJECUCIÓN</div>
+            <div class="kpi-label">🌪️ EMBUDO DE EJECUCIÓN (LIFETIME)</div>
             <canvas id="funnelChart"></canvas>
         </div>
 
         <div class="card" style="grid-column: span 3; max-height: 300px; overflow-y: auto;">
-            <div class="kpi-label">🛡️ AUDITORÍA DE OPERACIONES (TRACE)</div>
+            <div class="kpi-label">🛡️ AUDITORÍA DE OPERACIONES (TRACE - LAST 50)</div>
             <table style="width: 100%;">
                 <tr style="color: #666;">
                     <th>TIME</th><th>PAIR</th><th>STAGE</th><th>DETAILS</th><th style="text-align:right;">DATA</th>
                 </tr>
-                <tr><td style='color:#555;'>17.876</td><td style='color:#ccc;'>WIF/USDT</td><td style='color:#00ff9d;'>💰 EXIT_FILLED</td><td style='color:#777; font-size:9px;'>Success</td><td style='text-align:right; font-family:monospace; color:#aaa;'>8,2000</td></tr><tr><td style='color:#555;'>17.876</td><td style='color:#ccc;'>PEPE/USDT</td><td style='color:#00ff9d;'>💰 EXIT_FILLED</td><td style='color:#777; font-size:9px;'>Success</td><td style='text-align:right; font-family:monospace; color:#aaa;'>15,5000</td></tr><tr><td style='color:#555;'>17.876</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#e67e22;'>🐌 LATENCY_TIMEOUT</td><td style='color:#777; font-size:9px;'>Red lenta</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>17.876</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#e67e22;'>🐌 LATENCY_TIMEOUT</td><td style='color:#777; font-size:9px;'>Red lenta</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>17.876</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#e67e22;'>🐌 LATENCY_TIMEOUT</td><td style='color:#777; font-size:9px;'>Red lenta</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>17.875</td><td style='color:#ccc;'>ETH/USDT</td><td style='color:#c90;'>🔮 ORACLE_VETO</td><td style='color:#777; font-size:9px;'>Riesgo alto</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>17.875</td><td style='color:#ccc;'>ETH/USDT</td><td style='color:#c90;'>🔮 ORACLE_VETO</td><td style='color:#777; font-size:9px;'>Riesgo alto</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>17.875</td><td style='color:#ccc;'>ETH/USDT</td><td style='color:#c90;'>🔮 ORACLE_VETO</td><td style='color:#777; font-size:9px;'>Riesgo alto</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>17.875</td><td style='color:#ccc;'>ETH/USDT</td><td style='color:#c90;'>🔮 ORACLE_VETO</td><td style='color:#777; font-size:9px;'>Riesgo alto</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>17.875</td><td style='color:#ccc;'>ETH/USDT</td><td style='color:#c90;'>🔮 ORACLE_VETO</td><td style='color:#777; font-size:9px;'>Riesgo alto</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>17.875</td><td style='color:#ccc;'>BTC/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Spread bajo</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>17.875</td><td style='color:#ccc;'>BTC/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Spread bajo</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>17.875</td><td style='color:#ccc;'>BTC/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Spread bajo</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>17.874</td><td style='color:#ccc;'>BTC/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Spread bajo</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>17.874</td><td style='color:#ccc;'>BTC/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Spread bajo</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>17.874</td><td style='color:#ccc;'>BTC/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Spread bajo</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>17.874</td><td style='color:#ccc;'>BTC/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Spread bajo</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>17.874</td><td style='color:#ccc;'>BTC/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Spread bajo</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>17.874</td><td style='color:#ccc;'>BTC/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Spread bajo</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>17.865</td><td style='color:#ccc;'>BTC/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Spread bajo</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr>
+                <tr><td colspan='5' style='text-align:center; color:#333; padding:10px;'>NO ACTIVITY YET</td></tr>
             </table>
         </div>
 
         <div class="card" style="grid-column: span 1; max-height: 300px; overflow-y: auto;">
              <div class="kpi-label">📝 SYSTEM LOGS</div>
              <div style="font-family: monospace; color: #888; font-size: 10px; line-height: 1.4;">
-                
+                [20:42:49] 🎯 RADAR ACTUALIZADO: 1 Activos<br>[20:42:20] 🎯 RADAR ACTUALIZADO: 1 Activos<br>[20:41:49] 🎯 RADAR ACTUALIZADO: 1 Activos<br>[20:41:19] 🎯 RADAR ACTUALIZADO: 1 Activos<br>[20:40:49] 🎯 RADAR ACTUALIZADO: 1 Activos
              </div>
         </div>
     </div>
 
     <div class="card" style="margin-top: 15px; border-color: #333;">
-        <div class="kpi-label" style="color: var(--accent);">🛠️ PARÁMETROS DE VUELO (TOKYO CONFIG)</div>
+        <div class="kpi-label" style="color: var(--accent);">🛠️ PARÁMETROS DE VUELO (DYNAMIC CONFIG)</div>
         <div class="cfg-grid">
     <div class="cfg-card">
         <div class="cfg-section-title">🛑 CONTROL OPS</div>
-        <div class="cfg-row"><span class="cfg-key">BOT_DRY_RUN</span><span class="cfg-val val-false">false</span></div>
-        <div class="cfg-row"><span class="cfg-key">CAPITAL_SEMILLA</span><span class="cfg-val val-num">300.0</span></div>
+        <div class="cfg-row"><span class="cfg-key">BOT_DRY_RUN</span><span class="cfg-val val-false">true</span></div>
+        <div class="cfg-row"><span class="cfg-key">CAPITAL_SEMILLA</span><span class="cfg-val val-num">300,0</span></div>
     </div>
-
-    <div class="cfg-card">
-        <div class="cfg-section-title">🔫 ASIGNACIÓN</div>
-        <div class="cfg-row"><span class="cfg-key">TEST_CAPITALS</span><span class="cfg-val">20,30,40</span></div>
-        <div class="cfg-row"><span class="cfg-key">BOOK_DEPTH</span><span class="cfg-val val-num">20</span></div>
-    </div>
-
     <div class="cfg-card">
         <div class="cfg-section-title">💰 UMBRALES</div>
-        <div class="cfg-row"><span class="cfg-key">MIN_PROFIT_USDT</span><span class="cfg-val val-num">0.00</span></div>
-        <div class="cfg-row"><span class="cfg-key">NORMAL_MIN_PROF</span><span class="cfg-val val-num">0.00</span></div>
+        <div class="cfg-row"><span class="cfg-key">MIN_PROFIT</span><span class="cfg-val val-num">0,00</span></div>
+        <div class="cfg-row"><span class="cfg-key">NORMAL_PROFIT</span><span class="cfg-val val-num">0,00</span></div>
     </div>
-
     <div class="cfg-card">
         <div class="cfg-section-title">⚡ TOLERANCIAS RED</div>
         <div class="cfg-row"><span class="cfg-key">MAX_LATENCY_MS</span><span class="cfg-val val-num">120</span></div>
-        <div class="cfg-row"><span class="cfg-key">MAX_SLIPPAGE</span><span class="cfg-val val-num">0.003</span></div>
+        <div class="cfg-row"><span class="cfg-key">MAX_SLIPPAGE</span><span class="cfg-val val-num">0,003</span></div>
     </div>
-
     <div class="cfg-card">
         <div class="cfg-section-title">⏱️ VELOCIDAD</div>
         <div class="cfg-row"><span class="cfg-key">SCAN_INTERVAL</span><span class="cfg-val val-true">50ms</span></div>
-        <div class="cfg-row"><span class="cfg-key">SCAN_DURATION</span><span class="cfg-val val-num">480m</span></div>
     </div>
-
-    <div class="cfg-card">
-        <div class="cfg-section-title">🏛️ ARQUITECTURA</div>
-        <div class="cfg-row"><span class="cfg-key">EXCHANGES</span><span class="cfg-val">BN,BY,MX,KC</span></div>
-        <div class="cfg-row"><span class="cfg-key">ASSETS</span><span class="cfg-val">WIF,PEPE,IMX...</span></div>
-    </div>
-
     <div class="cfg-card">
         <div class="cfg-section-title">🧠 CEREBRO</div>
-        <div class="cfg-row"><span class="cfg-key">MIN_SPREAD</span><span class="cfg-val val-num">0.0012</span></div>
-        <div class="cfg-row"><span class="cfg-key">SCAN_SPREAD</span><span class="cfg-val val-num">0.0005</span></div>
-        <div class="cfg-row"><span class="cfg-key">STRATEGY</span><span class="cfg-val">SPATIAL</span></div>
+        <div class="cfg-row"><span class="cfg-key">MIN_SPREAD</span><span class="cfg-val val-num">0,0005</span></div>
+        <div class="cfg-row"><span class="cfg-key">ADVISOR</span><span class="cfg-val">BINANCE</span></div>
     </div>
-
-    <div class="cfg-card">
-        <div class="cfg-section-title">🔐 COORDINACIÓN</div>
-        <div class="cfg-row"><span class="cfg-key">LOCK_TIMEOUT</span><span class="cfg-val val-num">2000ms</span></div>
-        <div class="cfg-row"><span class="cfg-key">MAX_FAILURES</span><span class="cfg-val val-false">3</span></div>
-    </div>
-
-    <div class="cfg-card">
-        <div class="cfg-section-title">🤖 AUTONOMÍA (CFO)</div>
-        <div class="cfg-row"><span class="cfg-key">AUTO_DISCOVERY</span><span class="cfg-val val-true">true</span></div>
-        <div class="cfg-row"><span class="cfg-key">TRADE_SIZE_%</span><span class="cfg-val val-num">0.95</span></div>
-        <div class="cfg-row"><span class="cfg-key">IMBALANCE_TOL</span><span class="cfg-val val-num">0.30</span></div>
-    </div>
-
     <div class="cfg-card" style="border-color: var(--danger);">
         <div class="cfg-section-title" style="color:var(--danger)">🛡️ RIESGO</div>
-        <div class="cfg-row"><span class="cfg-key">MAX_DAILY_LOSS</span><span class="cfg-val val-false">0.05</span></div>
-        <div class="cfg-row"><span class="cfg-key">MAX_DRAWDOWN</span><span class="cfg-val val-false">0.10</span></div>
-        <div class="cfg-row"><span class="cfg-key">MAX_CONS_LOSS</span><span class="cfg-val val-false">3</span></div>
+        <div class="cfg-row"><span class="cfg-key">MAX_DAILY_LOSS</span><span class="cfg-val val-false">5,00%</span></div>
+        <div class="cfg-row"><span class="cfg-key">MAX_DRAWDOWN</span><span class="cfg-val val-false">10,00%</span></div>
+        <div class="cfg-row"><span class="cfg-key">MAX_STREAK</span><span class="cfg-val val-false">3</span></div>
     </div>
-
     <div class="cfg-card">
         <div class="cfg-section-title">🔮 ORÁCULO</div>
-        <div class="cfg-row"><span class="cfg-key">Z_SCORE_THR</span><span class="cfg-val val-num">1.5</span></div>
-        <div class="cfg-row"><span class="cfg-key">MIN_CONFIDENCE</span><span class="cfg-val val-num">0.60</span></div>
-        <div class="cfg-row"><span class="cfg-key">AGGR_SPREAD</span><span class="cfg-val val-num">0.001</span></div>
+        <div class="cfg-row"><span class="cfg-key">Z_SCORE_THR</span><span class="cfg-val val-num">1,5</span></div>
+        <div class="cfg-row"><span class="cfg-key">MIN_CONFIDENCE</span><span class="cfg-val val-num">0,60</span></div>
+        <div class="cfg-row"><span class="cfg-key">AGGR_SPREAD</span><span class="cfg-val val-num">0,0010</span></div>
     </div>
 </div>
 
     </div>
 
     <script>
-        // Gráfico Latencia
+        // Gráficos (Latencia y Embudo)
         const ctxLat = document.getElementById('latencyChart').getContext('2d');
         new Chart(ctxLat, {
             type: 'line',
-            data: { labels: Array.from({length: 30}, (_, i) => i), datasets: [] },
+            data: { labels: Array.from({length: 30}, (_, i) => i), datasets: [{label:'MEXC',data:[110, 110, 126, 126, 126, 264, 124, 124, 124, 101, 101, 110, 110, 139, 139, 90, 90, 90, 117, 104, 104, 104, 266, 266, 262, 262, 321, 321, 288, 288],borderColor:'#00ff9d',borderWidth:1,tension:0.1,pointRadius:0},{label:'BYBIT_SUB1',data:[318, 318, 347, 347, 347, 314, 337, 337, 337, 330, 330, 316, 316, 333, 333, 310, 310, 310, 340, 348, 348, 348, 314, 314, 384, 384, 314, 314, 341, 341],borderColor:'#ff0055',borderWidth:1,tension:0.1,pointRadius:0},{label:'BYBIT_SUB2',data:[353, 353, 321, 321, 321, 397, 351, 351, 351, 962, 962, 345, 345, 358, 358, 331, 331, 331, 340, 928, 928, 928, 344, 344, 400, 400, 339, 339, 314, 314],borderColor:'#58a6ff',borderWidth:1,tension:0.1,pointRadius:0},{label:'BYBIT_SUB3',data:[348, 348, 348, 348, 348, 975, 357, 357, 357, 388, 388, 345, 345, 357, 357, 334, 334, 334, 320, 317, 317, 317, 304, 304, 317, 317, 333, 333, 346, 346],borderColor:'#ffcc00',borderWidth:1,tension:0.1,pointRadius:0},{label:'BINANCE',data:[246, 246, 247, 247, 247, 722, 254, 254, 254, 246, 246, 247, 247, 275, 275, 245, 245, 245, 247, 242, 242, 242, 242, 242, 262, 262, 246, 246, 662, 662],borderColor:'#00ff9d',borderWidth:1,tension:0.1,pointRadius:0},{label:'OKX',data:[291, 291, 311, 311, 311, 290, 395, 395, 395, 294, 294, 294, 294, 313, 313, 295, 295, 295, 296, 296, 296, 296, 295, 295, 294, 294, 357, 357, 297, 297],borderColor:'#ff0055',borderWidth:1,tension:0.1,pointRadius:0},{label:'KUCOIN',data:[252, 252, 264, 264, 264, 264, 268, 268, 268, 314, 314, 259, 259, 301, 301, 271, 271, 271, 250, 267, 267, 267, 330, 330, 261, 261, 264, 264, 276, 276],borderColor:'#58a6ff',borderWidth:1,tension:0.1,pointRadius:0}] },
             options: {
                 responsive: true, maintainAspectRatio: false, animation: false,
                 scales: { y: { beginAtZero: true, grid: {color:'#222'} }, x: { display: false } },
@@ -190,15 +160,13 @@
                 plugins: { legend: { position: 'top', labels: { color: '#666', boxWidth: 10, font: { size: 9 } } } }
             }
         });
-
-        // Gráfico Embudo
         const ctxFunnel = document.getElementById('funnelChart').getContext('2d');
         new Chart(ctxFunnel, {
             type: 'bar',
             data: {
                 labels: ['Detectadas', 'Spread Bajo', 'Veto IA', 'Sin Liquidez', 'Lag Red', 'Err. Sistema', 'WINNERS'],
                 datasets: [{
-                    data: [20, 10, 5, 0, 3, 0, 2],
+                    data: [0, 0, 0, 0, 0, 0, 0],
                     backgroundColor: ['#333', '#555', '#7744aa', '#3366cc', '#cc6600', '#cc3333', '#00ff9d'],
                     borderRadius: 2
                 }]

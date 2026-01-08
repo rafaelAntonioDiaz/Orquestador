@@ -37,7 +37,6 @@ public class GoldRushOrchestrator {
         this.cfo = new PortfolioHealthManager(connector);
         // 3. Departamento de Inteligencia (Cerebro)
         this.scanner = new DeepMarketScanner(connector, coordinator);
-        this.scanner.injectCFO(cfo);
         this.scanner.setDryRun(BotConfig.DRY_RUN);
     }
     /**

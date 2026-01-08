@@ -9,4 +9,6 @@ import java.util.List;
  */
 public interface MarketListener {
     void updateTargets(List<String> newTargets);
+    // 🔥 NUEVO MÉTODO: Para enviar datos del Radar al Dashboard
+    void reportRadarDetection(String symbol, double score, double spreadPct, double volatility);
 }

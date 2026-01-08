@@ -218,9 +218,18 @@ public class BotConfig {
     // --- AGREGAR AL FINAL DE BotConfig.java ---
 
     public static double getRiskMaxDailyLoss() { return RISK_MAX_DAILY_LOSS; }
+    public static double getMaxLatencyMs(){return MAX_LATENCY_MS;}
     public static double getRiskMaxDrawdown() { return RISK_MAX_DRAWDOWN; }
     public static int getRiskMaxConsecutiveLosses() { return RISK_MAX_CONSECUTIVE_LOSSES; }
     public static long getRiskStreakPauseMs() { return RISK_STREAK_PAUSE_MS; }
     public static double getRiskMcRuinThreshold() { return RISK_MC_RUIN_THRESHOLD; }
 
+    // 🔥 Oracle & Cortex (NUEVOS GETTERS PARA TESTABILITY)
+    public static int getOracleHistorySize() { return ORACLE_HISTORY_SIZE; }
+    public static int getOracleLeadLagTicks() { return ORACLE_LEAD_LAG_TICKS; }
+    public static double getOracleZScoreThreshold() { return ORACLE_Z_SCORE_THRESHOLD; }
+    public static double getOracleMinConfidence() { return ORACLE_MIN_CONFIDENCE; }
+    public static double getOracleAggressiveSpread() { return ORACLE_AGGRESSIVE_SPREAD; }
+    public static String getAdvisorRefExchange() { return ADVISOR_REF_EXCHANGE; }
+    public static double getMinAssetValueUsdt() {return MIN_ASSET_VALUE_USDT;}
 }

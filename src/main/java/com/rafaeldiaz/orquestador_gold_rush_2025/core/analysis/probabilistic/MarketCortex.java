@@ -23,8 +23,7 @@ public class MarketCortex {
     private final AtomicLong pulseCount = new AtomicLong(0);
 
     public MarketCortex() {
-        BotLogger.info("🧠 MARKET CORTEX: Memoria asignada (" + BotConfig.ORACLE_HISTORY_SIZE + " ticks)");
-    }
+        BotLogger.info("🧠 MARKET CORTEX: Memoria asignada (" + BotConfig.getOracleHistorySize() + " ticks)");    }
 
     /**
      * Ingesta asíncrona de precios (Sidecar).
@@ -35,7 +34,8 @@ public class MarketCortex {
             assets.forEach((assetRaw, price) -> {
                 String asset = assetRaw.replace("USDT", "");
                 priceHistory.computeIfAbsent(asset, k -> new ConcurrentHashMap<>())
-                        .computeIfAbsent(exchange, k -> new CircularDoubleBuffer(BotConfig.ORACLE_HISTORY_SIZE))
+                        // USO DE GETTER (Testable)
+                        .computeIfAbsent(exchange, k -> new CircularDoubleBuffer(BotConfig.getOracleHistorySize()))
                         .add(price);
             });
         });

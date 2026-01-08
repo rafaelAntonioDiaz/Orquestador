@@ -1,14 +1,12 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
-import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.FeeManager;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.GlobalBalanceReporter;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.PortfolioHealthManager;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.probabilistic.MarketCortex;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.probabilistic.ProbabilisticOracle;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.estimator.StandardProfitEstimator;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.interfaces.ArbitrageStrategy;
-import com.rafaeldiaz.orquestador_gold_rush_2025.core.interfaces.MarketDataProvider;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.interfaces.ProfitEstimator;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.BotConfig;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.ExecutionCoordinator;
@@ -16,6 +14,7 @@ import com.rafaeldiaz.orquestador_gold_rush_2025.core.provider.CachingMarketData
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.strategy.impl.AdaptiveSpatialStrategy;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.strategy.impl.SpatialArbitrageStrategy;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.strategy.impl.TriangularArbitrageStrategy;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.telemetry.ArbitrageTrace;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.telemetry.DashboardService;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.telemetry.MetricsService;
 import com.rafaeldiaz.orquestador_gold_rush_2025.execution.CrossTradeExecutor;
@@ -99,10 +98,6 @@ public class DeepMarketScanner implements MarketListener {
         this.oracle = new ProbabilisticOracle(this.cortex);
 
         if (BotConfig.isSpatialStrategy()) {
-            // AHORA SÍ FUNCIONA: 'this.cfo' existe y es accesible
-            strategies.add(new SpatialArbitrageStrategy(BotConfig.MIN_SCAN_SPREAD, this.cfo));
-        }
-        if (BotConfig.isSpatialStrategy()) {
             strategies.add(new AdaptiveSpatialStrategy(this.cfo));
         }
 
@@ -112,6 +107,7 @@ public class DeepMarketScanner implements MarketListener {
         this.triangularExecutor = new TriangularExecutor(connector);
         setDryRun(this.dryRun);
     }
+
 
     public void startOmniScan(int durationMinutes) {
         BotLogger.info("⚡ AGENTE TOKIO v4.3: INTEGRIDAD VERIFICADA");
@@ -144,6 +140,9 @@ public class DeepMarketScanner implements MarketListener {
         // FASE 1: Fetch Global
         Map<String, Map<String, Double>> prices = dataProvider.fetchGlobalPrices(BotConfig.getActiveExchanges());
         if (prices.isEmpty()) return;
+        Map<String, Double> refPrices =
+                prices.getOrDefault(BotConfig.
+                        getAdvisorRefExchange(), prices.values().iterator().next());
         // 🔥 FASE 1.1: INGESTA PARALELA (Sidecar)
         // Alimentamos el Cortex sin bloquear el flujo principal
         virtualExecutor.submit(() -> cortex.ingest(prices));
@@ -169,7 +168,7 @@ public class DeepMarketScanner implements MarketListener {
         // Pasamos datos del Oráculo (si los tenemos a mano, o 0.0)
         // Para simplificar, puede pasar 0.0 por ahora o capturar el último 'verdict'
 
-        dashboard.updateInventory(currentSnapshot.balances());
+        dashboard.updateInventory(currentSnapshot.balances(),refPrices);
         dashboard.updateStats(cyclesCount.get(), totalPotentialProfit.sum());
         dashboard.generate();
     }
@@ -343,17 +342,9 @@ public class DeepMarketScanner implements MarketListener {
     }
     // =========================================================
     // 🛠️ MÉTODOS DE COMPATIBILIDAD (PARA GOLDRUSHORCHESTRATOR)
-    // =========================================================
+    // ========================================================
 
-    /**
-     * Legacy Support: El Orchestrator intenta inyectar el CFO.
-     * En v4, el Scanner gestiona su propio CFO internamente para desacoplamiento,
-     * pero mantenemos este método para no romper la compilación.
-     */
-    public void injectCFO(PortfolioHealthManager cfo) {
-        // No-Op: El Scanner ya tiene su instancia interna gestionada en el constructor.
-        // BotLogger.info("ℹ️ Scanner v4 usa CFO interno. Inyección externa ignorada.");
-    }
+
 
     /**
      * Legacy Support: Obtiene el PnL total acumulado.
@@ -390,6 +381,11 @@ public class DeepMarketScanner implements MarketListener {
                 String targetEx = opp.buyExchange().equals(BotConfig.ADVISOR_REF_EXCHANGE)
                         ? opp.sellExchange()
                         : opp.buyExchange();
+                if (opp.grossSpreadPct() < BotConfig.getMinScanSpread()) {
+                    dashboard.registrarTraza(new ArbitrageTrace(asset, ArbitrageTrace.AuditStage.SCAN_IGNORED, "Spread bajo", opp.grossSpreadPct()));
+                    continue;
+                }
+
 
                 // 3. FILTRADO DINÁMICO
                 // Si el spread es menor al sugerido por el oráculo, descartamos.
@@ -437,5 +433,19 @@ public class DeepMarketScanner implements MarketListener {
         dashboard.updateNetwork(networkLatencies);
         dashboard.updateStats(cyclesCount.get(), totalPotentialProfit.sum());
         dashboard.generate(); // Escribe dashboard.html
+    }
+    // EN DeepMarketScanner.java (Implementando MarketListener)
+
+    @Override
+    public void reportRadarDetection(String symbol, double score, double spreadPct, double volatility) {
+        // 1. Determinar Estado Visual
+        String status;
+        if (score > 0.85) status = "🔥 HOT";
+        else if (score > 0.6) status = "🚀 HIGH";
+        else status = "👀 RADAR";
+
+        // 2. Enviar al Dashboard
+        // Nota: spreadPct viene como 2.5 (2.5%), el Dashboard espera 0.025 para formatearlo a %
+        dashboard.updateRadar(symbol, score, spreadPct / 100.0, status);
     }
 }

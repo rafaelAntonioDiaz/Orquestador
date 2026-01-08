@@ -219,18 +219,22 @@ public class DynamicPairSelector {
         }
     }
     private void logIntelligenceReport(List<OpportunityScore> top) {
-        if (top.isEmpty()) {
-            return;
-        }
+        if (top.isEmpty()) return;
+
         StringBuilder sb = new StringBuilder("\n📡 RADAR DE OPORTUNIDADES:\n");
         for (int i = 0; i < top.size(); i++) {
             OpportunityScore s = top.get(i);
+
+            // 1. Log en consola
             sb.append(String.format("   💡 #%d %-8s | Score: %4.2f | Spread: %5.2f%% | Vol: %4.2f%%\n",
                     i + 1, s.pair, s.score, s.spreadPercent, s.atrPercent));
-        }
-        // Solo sugerimos acción si hay data real
-        sb.append(" Si inyectas saldo en estos activos, se activará en segundos.\n");
 
+            // 2. 🔥 CONEXIÓN VITAL: Enviar al Dashboard a través del Listener
+            if (marketListener != null) {
+                marketListener.reportRadarDetection(s.pair, s.score, s.spreadPercent, s.atrPercent);
+            }
+        }
+        sb.append(" Si inyectas saldo en estos activos, se activará en segundos.\n");
         BotLogger.info(sb.toString());
     }
 

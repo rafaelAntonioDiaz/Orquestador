@@ -23,7 +23,7 @@ public class Main {
             System.out.println(PURPLE + "  ██║   ██║██║   ██║██║     ██║  ██║    ██╔══██╗██║   ██║╚════██║██╔══██║" + RESET);
             System.out.println(PURPLE + "  ╚██████╔╝╚██████╔╝███████╗██████╔╝    ██║  ██║╚██████╔╝███████║██║  ██║" + RESET);
             System.out.println(PURPLE + "   ╚═════╝  ╚═════╝ ╚══════╝╚═════╝     ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝" + RESET);
-            System.out.println(WHITE_BOLD + "           ⚡ AGENTE TOKIO | JAVA 25 BARE METAL | v3.0 RELEASE ⚡" + RESET);
+            System.out.println(WHITE_BOLD + "           ⚡ AGENTE TOKIO | JAVA 25 BARE METAL | v4.5 STABLE ⚡" + RESET);
             System.out.println("\n");
 
             BotLogger.info(CYAN + "🔌 INICIALIZANDO SISTEMAS NEURONALES..." + RESET);
@@ -38,7 +38,7 @@ public class Main {
 
             // 3. Contratación del Director
             GoldRushOrchestrator director = new GoldRushOrchestrator(connector, coordinator);
-            BotLogger.info(GREEN + "   [✔] DIRECTOR DE ORQUESTA: EN LÍNEA" + RESET);
+            BotLogger.info(GREEN + "   [✔] AGENTE TOKIO: EN LÍNEA" + RESET);
 
             // 4. Configurar Shutdown Hook (Elegante y Seguro)
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {

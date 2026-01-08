@@ -8,6 +8,7 @@ import org.mockito.MockedStatic;
 import java.io.File;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
+import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
@@ -20,10 +21,10 @@ class RiskManagerTest {
 
     private RiskManager riskManager;
     private StubCoordinator stubCoordinator;
-    private static MockedStatic<BotConfig> mockedConfig; // Para métodos estáticos si los hubiera
+    private static MockedStatic<BotConfig> mockedConfig;
 
-    // 🔥 ARCHIVO AISLADO
-    private static final String TEST_STATE_FILE = "test_financial_state_isolated.json";
+    // 🔥 Variable para nombre de archivo único por test
+    private String uniqueStateFile;
 
     // 🕵️ STUB COORDINATOR
     static class StubCoordinator extends ExecutionCoordinator {
@@ -39,7 +40,6 @@ class RiskManagerTest {
 
     @BeforeAll
     static void initGlobalMocks() {
-        // Mockeamos la clase para interceptar métodos si fuera necesario
         mockedConfig = mockStatic(BotConfig.class);
     }
 
@@ -50,21 +50,30 @@ class RiskManagerTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        new File(TEST_STATE_FILE).delete();
+        // ✅ CORRECCIÓN DE CARRERA: Nombre de archivo único por ejecución
+        // Evita que hilos asíncronos de tests pasados corrompan el actual.
+        uniqueStateFile = "risk_state_" + UUID.randomUUID() + ".json";
+
         stubCoordinator = new StubCoordinator();
 
-        // 💉 CONFIGURACIÓN MOCKEADA (Esto funciona perfecto en Java 25)
+        // 💉 CONFIGURACIÓN MOCKEADA
         mockedConfig.when(BotConfig::getRiskMaxDailyLoss).thenReturn(0.02);        // 2%
         mockedConfig.when(BotConfig::getRiskMaxDrawdown).thenReturn(0.08);         // 8%
         mockedConfig.when(BotConfig::getRiskMaxConsecutiveLosses).thenReturn(5);   // 5 Rachas
         mockedConfig.when(BotConfig::getRiskStreakPauseMs).thenReturn(3600000L);   // 1 Hora
         mockedConfig.when(BotConfig::getRiskMcRuinThreshold).thenReturn(0.05);
 
-        riskManager = new RiskManager(stubCoordinator, 1000.0, TEST_STATE_FILE);
+        // Inicializamos siempre con $1000 y archivo limpio
+        riskManager = new RiskManager(stubCoordinator, 1000.0, uniqueStateFile);
     }
+
     @AfterEach
     void tearDown() {
-        new File(TEST_STATE_FILE).delete();
+        // Limpieza: Borramos el archivo único creado
+        File f = new File(uniqueStateFile);
+        if (f.exists()) {
+            f.delete();
+        }
     }
 
     // ==========================================
@@ -152,7 +161,7 @@ class RiskManagerTest {
     @Test
     @DisplayName("🔓 OVERRIDE: Desbloqueo manual")
     void shouldResetStats_OnManualOverride() {
-        riskManager.reportTradeResult(-50.0); // Trigger Daily Loss
+        riskManager.reportTradeResult(-50.0); // Trigger Daily Loss ($50 > $20)
         assertThat(riskManager.canExecuteTrade()).isFalse();
 
         riskManager.overrideLockdown();
@@ -170,8 +179,9 @@ class RiskManagerTest {
             IntStream.range(0, numTrades).forEach(i -> {
                 executor.submit(() -> riskManager.reportTradeResult(profitPerTrade));
             });
+            // Esperamos un poco a que terminen los virtuales
             executor.shutdown();
-            executor.awaitTermination(5, TimeUnit.SECONDS);
+            executor.awaitTermination(2, TimeUnit.SECONDS);
         }
 
         // 1000 trades de $1 + $1000 inicial = $2000
@@ -191,31 +201,8 @@ class RiskManagerTest {
     }
 
     // ==========================================
-    // 🛠️ HERRAMIENTAS DE INYECCIÓN (DARK MAGIC)
+    // 🛠️ HERRAMIENTAS
     // ==========================================
-
-    /**
-     * Rompe la seguridad de Java para modificar constantes 'static final' en tiempo de test.
-     * Esto nos permite probar con valores fijos (2%, 5 rachas) sin depender del .env
-     */
-    private void setRiskParameter(String fieldName, Object value) throws Exception {
-        try {
-            Field field = BotConfig.class.getDeclaredField(fieldName);
-            field.setAccessible(true);
-
-            // Truco para quitar 'final' (Funciona en Java < 17, y en algunos setups de test en Java 21+)
-            // Si falla en Java 25 estricto, el test usará los valores del .env y imprimirá advertencia.
-            Field modifiersField = Field.class.getDeclaredField("modifiers");
-            modifiersField.setAccessible(true);
-            modifiersField.setInt(field, field.getModifiers() & ~Modifier.FINAL);
-
-            field.set(null, value);
-        } catch (Exception e) {
-            // Fallback silencioso: Si no podemos inyectar, usamos lo que haya en el .env
-            System.err.println("⚠️ WARN: No se pudo inyectar " + fieldName + ". Usando valor real del .env.");
-        }
-    }
-
     private double getPrivateField(Object target, String fieldName) {
         try {
             Field f = target.getClass().getDeclaredField(fieldName);

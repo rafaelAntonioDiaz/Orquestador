@@ -3,32 +3,38 @@ package com.rafaeldiaz.orquestador_gold_rush_2025.execution;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.BotConfig; // <--- LA FUENTE DE LA VERDAD
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.BotConfig;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.ExecutionCoordinator;
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
 
 import java.io.File;
 import java.io.IOException;
-import java.time.Instant;
 import java.time.LocalDate;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * 📉 RISK MANAGEMENT SYSTEM (Versión Sincronizada con BotConfig)
- * Totalmente desacoplado de valores hardcodeados.
+ * 📉 RISK MANAGEMENT SYSTEM (PERFORMANCE OPTIMIZED)
+ * Patrón: Configuración Inmutable. Lee parámetros al inicio y los cachea.
+ * Cero overhead de lectura de configuración en tiempo de ejecución.
  */
 public class RiskManager {
     private final ExecutionCoordinator coordinator;
     private final String stateFile;
 
-    // --- VARIABLES DE ESTADO ---
+    // ⚙️ PARÁMETROS DE RIESGO (CACHED FINAL)
+    // Se leen una sola vez al instanciar. Eficiencia máxima.
+    private final double maxDailyLossLimit;
+    private final double maxDrawdownLimit;
+    private final int maxConsecutiveLosses;
+    private final long streakPauseMs;
+    private final double mcRuinThreshold;
+
+    // Estado Financiero
     private double initialDailyCapital;
     private double currentCapital;
     private double peakCapital;
     private double dailyPnL = 0.0;
-
-    // Contadores Dinámicos
     private int consecutiveLosses = 0;
     private long pauseUntilTimestamp = 0;
 
@@ -53,35 +59,35 @@ public class RiskManager {
         this.initialDailyCapital = startCapital;
         this.peakCapital = startCapital;
 
+        // 1. CAPTURA DE CONFIGURACIÓN (SNAPSHOT AL INICIO)
+        // Usamos los getters para permitir que el Test inyecte valores si el Mock está activo.
+        // En producción, esto lee las constantes estáticas una sola vez.
+        this.maxDailyLossLimit = BotConfig.getRiskMaxDailyLoss();
+        this.maxDrawdownLimit = BotConfig.getRiskMaxDrawdown();
+        this.maxConsecutiveLosses = BotConfig.getRiskMaxConsecutiveLosses();
+        this.streakPauseMs = BotConfig.getRiskStreakPauseMs();
+        this.mcRuinThreshold = BotConfig.getRiskMcRuinThreshold();
+
         BotLogger.info("🛡️ RiskManager: Iniciando carga de estado desde: " + stateFile);
         loadFinancialState();
 
-        // Log de parámetros cargados desde BotConfig para auditoría
-        BotLogger.info(String.format("🛡️ PARÁMETROS: MaxLoss=%.1f%% | MaxDD=%.1f%% | MaxStreak=%d",
-                BotConfig.RISK_MAX_DAILY_LOSS * 100,
-                BotConfig.RISK_MAX_DRAWDOWN * 100,
-                BotConfig.RISK_MAX_CONSECUTIVE_LOSSES));
+        BotLogger.info(String.format("🛡️ PARÁMETROS ACTIVOS: MaxLoss=%.1f%% | MaxDD=%.1f%% | MaxStreak=%d",
+                maxDailyLossLimit * 100, maxDrawdownLimit * 100, maxConsecutiveLosses));
 
         validateRiskParameters();
     }
 
     public synchronized boolean canExecuteTrade() {
-        // Chequeo de Pausa Temporal (Cooldown)
         if (status.get() == SystemStatus.PAUSED_DEVIATION) {
             if (System.currentTimeMillis() > pauseUntilTimestamp) {
-                BotLogger.info("🟢 COOLDOWN FINALIZADO. Reactivando sistema tras pausa por racha.");
+                BotLogger.info("🟢 COOLDOWN FINALIZADO. Reactivando sistema.");
                 status.set(SystemStatus.OPERATIONAL);
                 consecutiveLosses = 0;
                 return true;
             }
             return false;
         }
-
-        if (status.get() != SystemStatus.OPERATIONAL) {
-            BotLogger.warn("⛔ OPERACIÓN DENEGADA. Estatus: " + status.get());
-            return false;
-        }
-        return true;
+        return status.get() == SystemStatus.OPERATIONAL;
     }
 
     public synchronized void reportTradeResult(double pnlUSD) {
@@ -89,7 +95,6 @@ public class RiskManager {
         dailyPnL += pnlUSD;
         if (currentCapital > peakCapital) peakCapital = currentCapital;
 
-        // Lógica de Racha
         if (pnlUSD < 0) {
             consecutiveLosses++;
             BotLogger.warn("📉 PÉRDIDA REGISTRADA. Racha Actual: " + consecutiveLosses);
@@ -103,40 +108,32 @@ public class RiskManager {
     }
 
     private void validateRiskParameters() {
-        // A. Disyuntor Diario
+        // A. DISYUNTOR DIARIO (Usando variables cacheadas)
         double dailyLossRatio = -dailyPnL / initialDailyCapital;
-
-        // CAMBIO: Usamos BotConfig.getRiskMaxDailyLoss() en vez de la variable directa
-        if (dailyPnL < 0 && dailyLossRatio >= BotConfig.getRiskMaxDailyLoss()) {
+        if (dailyPnL < 0 && dailyLossRatio >= this.maxDailyLossLimit) {
             status.set(SystemStatus.HALTED_DAILY_LIMIT);
-            String msg = String.format("🛑 DISYUNTOR DIARIO ACTIVADO. Pérdida: %.2f%%.", dailyLossRatio * 100);
-            BotLogger.error(msg);
+            BotLogger.error(String.format("🛑 DISYUNTOR DIARIO ACTIVADO. Pérdida: %.2f%%.", dailyLossRatio * 100));
             coordinator.forceGlobalLockdown("DAILY_LOSS_LIMIT");
             return;
         }
 
-        // B. Disyuntor Drawdown
+        // B. DISYUNTOR DRAWDOWN
         double currentDrawdown = (peakCapital - currentCapital) / peakCapital;
-
-        // CAMBIO: Usamos getter
-        if (currentDrawdown >= BotConfig.getRiskMaxDrawdown()) {
+        if (currentDrawdown >= this.maxDrawdownLimit) {
             status.set(SystemStatus.HALTED_DRAWDOWN);
             BotLogger.error(String.format("💀 CRITICAL DRAWDOWN (%.2f%%).", currentDrawdown * 100));
-            // coordinator.forceGlobalLockdown("MAX_DRAWDOWN"); // Opcional según tu lógica
+            // coordinator.forceGlobalLockdown("MAX_DRAWDOWN");
             return;
         }
 
-        // C. Disyuntor de Racha
-        // CAMBIO: Usamos getter
-        if (consecutiveLosses >= BotConfig.getRiskMaxConsecutiveLosses()) {
+        // C. DISYUNTOR RACHA
+        if (consecutiveLosses >= this.maxConsecutiveLosses) {
             status.set(SystemStatus.PAUSED_DEVIATION);
-            // CAMBIO: Usamos getter
-            this.pauseUntilTimestamp = System.currentTimeMillis() + BotConfig.getRiskStreakPauseMs();
-
+            this.pauseUntilTimestamp = System.currentTimeMillis() + this.streakPauseMs;
             BotLogger.warn("⚠️ RACHA DE PÉRDIDAS (>limit). Pausando sistema por enfriamiento.");
-            BotLogger.warn("   -> Reactivación programada: " + Instant.ofEpochMilli(pauseUntilTimestamp));
         }
     }
+
     private void saveFinancialState() {
         try {
             ObjectNode node = mapper.createObjectNode();
@@ -148,17 +145,13 @@ public class RiskManager {
             node.put("status", status.get().name());
             node.put("consecutiveLosses", consecutiveLosses);
             node.put("pauseUntilTimestamp", pauseUntilTimestamp);
-
             mapper.writerWithDefaultPrettyPrinter().writeValue(new File(this.stateFile), node);
-        } catch (IOException e) {
-            BotLogger.error("⚠️ Error I/O RiskManager: " + e.getMessage());
-        }
+        } catch (IOException e) { BotLogger.error("Error IO Risk: " + e.getMessage()); }
     }
 
     private void loadFinancialState() {
         File file = new File(this.stateFile);
         if (!file.exists()) return;
-
         try {
             JsonNode node = mapper.readTree(file);
             String savedDate = node.path("date").asText();
@@ -183,46 +176,30 @@ public class RiskManager {
                 this.pauseUntilTimestamp = 0;
                 saveFinancialState();
             }
-        } catch (IOException e) {
-            BotLogger.error("⚠️ Error carga RiskManager: " + e.getMessage());
-        }
+        } catch (IOException e) { BotLogger.error("Error Load Risk: " + e.getMessage()); }
     }
 
     public void overrideLockdown() {
-        status.set(SystemStatus.OPERATIONAL);
-        consecutiveLosses = 0;
-        pauseUntilTimestamp = 0;
-        BotLogger.warn("🔓 INTERVENCIÓN MANUAL: Sistema restablecido.");
-        saveFinancialState();
+        status.set(SystemStatus.OPERATIONAL); consecutiveLosses = 0; pauseUntilTimestamp = 0; saveFinancialState();
     }
 
     public boolean runMonteCarloSimulation(double winRate, double avgWin, double avgLoss) {
-        int simulations = 1000;
-        int tradesPerSim = 100;
-        int ruinCount = 0;
-        double ruinThreshold = currentCapital * 0.80;
-
+        int simulations = 1000; int tradesPerSim = 100; int ruinCount = 0;
+        double ruinThreshold = currentCapital * (1.0 - 0.20); // 20% DD hardcap para MC
         java.util.concurrent.ThreadLocalRandom random = java.util.concurrent.ThreadLocalRandom.current();
 
         for (int i = 0; i < simulations; i++) {
             double simulatedEquity = currentCapital;
             for (int t = 0; t < tradesPerSim; t++) {
-                if (random.nextDouble() < winRate) simulatedEquity += avgWin;
-                else simulatedEquity -= avgLoss;
-
-                if (simulatedEquity < ruinThreshold) {
-                    ruinCount++;
-                    break;
-                }
+                if (random.nextDouble() < winRate) simulatedEquity += avgWin; else simulatedEquity -= avgLoss;
+                if (simulatedEquity < ruinThreshold) { ruinCount++; break; }
             }
         }
         double ruinProbability = (double) ruinCount / simulations;
-        BotLogger.info(String.format("🎲 Monte Carlo: Prob. Ruina (20%% drawdown) = %.2f%%", ruinProbability * 100));
+        BotLogger.info(String.format("🎲 Monte Carlo: Prob. Ruina = %.2f%%", ruinProbability * 100));
 
-        // USO DE BOTCONFIG
-        if (ruinProbability > BotConfig.getRiskMcRuinThreshold()) {
-            BotLogger.error("🚨 MONTE CARLO ALERT: Riesgo estadístico inaceptable. Bloqueando.");
-            status.set(SystemStatus.HALTED_DRAWDOWN);
+        if (ruinProbability > this.mcRuinThreshold) {
+            BotLogger.error("🚨 RIESGO INACEPTABLE. Monte Carlo falló.");
             return false;
         }
         return true;

@@ -2,7 +2,7 @@ package com.rafaeldiaz.orquestador_gold_rush_2025.core.scanner;
 
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.PortfolioHealthManager;
-import com.rafaeldiaz.orquestador_gold_rush_2025.core.strategy.impl.SpatialArbitrageStrategy;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.strategy.impl.AdaptiveSpatialStrategy;
 import com.rafaeldiaz.orquestador_gold_rush_2025.model.ArbitrageOpportunity;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -33,8 +33,7 @@ class InventoryAwarenessTest {
 
         // 2. SETUP DE LA ESTRATEGIA
         // Umbral muy bajo (0.1%) para asegurar que el precio no sea el problema
-        SpatialArbitrageStrategy strategy = new SpatialArbitrageStrategy(0.001, mockCFO);
-
+        AdaptiveSpatialStrategy strategy = new AdaptiveSpatialStrategy(mockCFO);
         // 3. MERCADO SIMULADO (La trampa)
         // Precio en MEXC (Buy): $2.00
         // Precio en KUCOIN (Sell): $2.50  <-- ¡GRAN OPORTUNIDAD! (Pero no tenemos WIF en Kucoin)
