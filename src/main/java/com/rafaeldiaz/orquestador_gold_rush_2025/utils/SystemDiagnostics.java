@@ -4,12 +4,13 @@ import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.FeeManager;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.PortfolioHealthManager;
 import com.rafaeldiaz.orquestador_gold_rush_2025.execution.RiskManager;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator.BotConfig; // ✅ Importamos Config
 
 import java.text.DecimalFormat;
 import java.util.List;
 
 /**
- * 🩺 DIAGNÓSTICO DE SISTEMAS (PRE-FLIGHT CHECK) - FIXED
+ * 🩺 DIAGNÓSTICO DE SISTEMAS (PRE-FLIGHT CHECK) - FIXED & OPTIMIZED
  */
 public class SystemDiagnostics {
 
@@ -29,7 +30,7 @@ public class SystemDiagnostics {
         System.out.println("║       🚀 INICIANDO SECUENCIA DE DESPEGUE (V.2025)          ║");
         System.out.println("╚════════════════════════════════════════════════════════════╝" + RESET);
 
-        wait(500);
+        pause(500); // ✅ Renombrado de wait() a pause()
 
         // 1. 🛰️ TELEMETRÍA
         printStep("1/5", "Calibrando Antenas de Telemetría...");
@@ -53,69 +54,94 @@ public class SystemDiagnostics {
 
         System.out.println("\n" + GREEN + "✅ TODOS LOS SISTEMAS NOMINALES. LISTO PARA OPERAR." + RESET);
         System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-        wait(1000);
+        pause(1000);
     }
 
     private static void checkNetwork(ExchangeConnector connector) {
-        List<String> exchanges = List.of("binance", "bybit", "mexc", "kucoin");
+        // ✅ CORRECCIÓN: Usamos la lista de exchanges ACTIVA desde la configuración
+        List<String> exchanges = BotConfig.getActiveExchanges();
+
+        // Fallback por seguridad si la lista viene vacía
+        if (exchanges == null || exchanges.isEmpty()) {
+            exchanges = List.of("binance", "bybit", "mexc", "kucoin");
+        }
+
         boolean allGood = true;
 
         for (String ex : exchanges) {
-            System.out.print("   📡 Ping " + String.format("%-10s", ex.toUpperCase()) + " -> ");
+            System.out.print("   📡 Ping " + String.format("%-12s", ex.toUpperCase()) + " -> ");
             try {
                 long start = System.currentTimeMillis();
                 connector.fetchPrice(ex, "BTCUSDT");
                 long rtt = System.currentTimeMillis() - start;
-                String color = (rtt < 200) ? GREEN : (rtt < 500) ? YELLOW : RED;
+
+                // Umbrales ajustados para Bare Metal (150ms es el límite crítico)
+                String color = (rtt < 150) ? GREEN : (rtt < 300) ? YELLOW : RED;
                 System.out.println(color + rtt + "ms [OK]" + RESET);
-                wait(100);
+                pause(50);
             } catch (Exception e) {
                 System.out.println(RED + "ERROR [OFFLINE]" + RESET);
                 allGood = false;
             }
         }
-        if(!allGood) BotLogger.warn("⚠️ Algún enlace tiene latencia alta.");
+        if(!allGood) BotLogger.warn("⚠️ ALERTA: Latencia alta o pérdida de paquetes en enlaces críticos.");
     }
 
     private static void checkIdentity() {
-        String ip = ExternalIpFetcher.getMyPublicIp();
-        System.out.println("   🌐 IP Pública: " + CYAN + ip + RESET);
+        try {
+            // Manejo de excepción por si ExternalIpFetcher no está disponible
+            String ip = com.rafaeldiaz.orquestador_gold_rush_2025.utils.ExternalIpFetcher.getMyPublicIp();
+            System.out.println("   🌐 IP Pública: " + CYAN + ip + RESET);
+        } catch (Exception e) {
+            System.out.println("   🌐 IP Pública: " + YELLOW + "NO DETECTADA" + RESET);
+        }
         System.out.println("   🛡️ Encriptación: " + GREEN + "AES-256 [ACTIVA]" + RESET);
-        wait(200);
+        pause(200);
     }
 
     private static void checkTreasury(PortfolioHealthManager cfo) {
-        if (cfo == null) return;
+        if (cfo == null) {
+            System.out.println(RED + "   ❌ CFO NO DISPONIBLE" + RESET);
+            return;
+        }
 
-        // ¡AHORA SÍ EXISTE ESTE MÉTODO!
+        // Ejecutamos la auditoría real contra las APIs
         cfo.performAudit();
         double totalEquity = cfo.getTotalEquityUsdt();
 
         System.out.println("   💵 Capital Total Detectado: " + GREEN + "$" + df.format(totalEquity) + RESET);
-        wait(200);
+        pause(200);
     }
 
     private static void checkEconomy(FeeManager feeManager) {
-        // CORRECCIÓN AQUÍ: getTradingFee devuelve double, no double[]
-        double fee = feeManager.getTradingFee("binance", "BTCUSDT", "TAKER");
+        if (feeManager == null) return;
+
+        // ✅ CORRECCIÓN: Usamos el Exchange de Referencia configurado (ej: Binance o Bybit)
+        String refExchange = BotConfig.getAdvisorRefExchange();
+        if (refExchange == null || refExchange.isEmpty()) refExchange = "binance";
+
+        double fee = feeManager.getTradingFee(refExchange, "BTCUSDT", "TAKER");
 
         System.out.println("   📊 Motor de Tarifas: " + GREEN + "ONLINE" + RESET);
-        System.out.println("   📉 Fee Referencia (Binance Taker): " + CYAN + String.format("%.3f", fee * 100) + "%" + RESET);
-        wait(200);
+        System.out.println("   📉 Fee Ref (" + refExchange.toUpperCase() + "): " + CYAN + String.format("%.4f", fee * 100) + "%" + RESET);
+        pause(200);
     }
 
     private static void checkRisk(RiskManager riskManager) {
+        if (riskManager == null) return;
+
         System.out.println("   👮 Escudo Diario: " + GREEN + "ACTIVADO" + RESET);
-        System.out.println("   🛑 Stop-Loss Global: " + GREEN + "VIGILANDO" + RESET);
-        wait(200);
+        System.out.println("   🛑 Stop-Loss (" + (BotConfig.getRiskMaxDailyLoss() * 100) + "%): " + GREEN + "VIGILANDO" + RESET);
+        pause(200);
     }
 
     private static void printStep(String step, String msg) {
         System.out.println(YELLOW + "➤ [" + step + "] " + RESET + msg);
-        wait(200);
+        pause(200);
     }
 
-    private static void wait(int ms) {
+    // ✅ Renombrado para evitar conflicto con Object.wait()
+    private static void pause(int ms) {
         try { Thread.sleep(ms); } catch (InterruptedException e) {}
     }
 }

@@ -1,5 +1,7 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025.core.telemetry;
 
+import com.rafaeldiaz.orquestador_gold_rush_2025.model.LatencyBreakdown;
+
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
@@ -14,6 +16,7 @@ import java.util.concurrent.atomic.LongAdder;
  */
 public class MetricsService {
 
+    // Instancia Singleton
     private static final MetricsService INSTANCE = new MetricsService();
 
     // ⏱️ CONTEXTO TEMPORAL
@@ -29,30 +32,29 @@ public class MetricsService {
     // 💰 NEGOCIO
     private final LongAdder totalTrades = new LongAdder();
     private final LongAdder winningTrades = new LongAdder();
-
-    // ✅ CORRECCIÓN 1: DoubleAdder es la estrella aquí.
     private final DoubleAdder estimatedPnL = new DoubleAdder();
 
-    // ❌ ELIMINADO: private final Object pnlLock = new Object(); (Ya no lo necesitamos)
+    // 📜 HISTORIAL DE LATENCIA ( Mantiene las últimas 50)
+    // Estructura para guardar las últimas 50 operaciones (Buffer Circular ligero)
+    private static final int MAX_HISTORY_SIZE = 50;
+    private final java.util.concurrent.ConcurrentLinkedDeque<LatencyBreakdown>
+            latencyHistory = new java.util.concurrent.ConcurrentLinkedDeque<>();
 
-    private MetricsService() {
+
+    public MetricsService() {
         this.sessionStart = Instant.now();
     }
 
     public static MetricsService get() { return INSTANCE; }
-
-    // --- 📝 API DE REGISTRO ---
-
-    public void recordOp() { // Simplificado si no usas args, o ajusta según necesites
+    /**
+     * Registra un "latido" u operación del sistema.
+     * Usado por DeepMarketScanner para indicar "Ciclo Terminado".
+     */
+    public void recordOp() {
         throughputCounter.increment();
     }
 
-    // Sobrecarga para mantener compatibilidad si la llamas con args
-    public void recordOp(String exchange, long latencyMs, boolean error) {
-        throughputCounter.increment();
-        if (error) recordError(exchange);
-        // Opcional: registrar latencia aquí también si quieres centralizar
-    }
+
 
     public void recordError(String exchange) {
         errorCounts.computeIfAbsent(exchange, k -> new LongAdder()).increment();
@@ -122,5 +124,47 @@ public class MetricsService {
             long c = count.sum();
             return c == 0 ? 0.0 : (double) totalMs.sum() / c;
         }
+    }
+    /**
+     * 🟢 MÉTODO RESTAURADO: Registra el desglose de latencia de una operación.
+     * Llamado desde el Fast Lane (debe ser muy rápido).
+     */
+    public void recordLatencyBreakdown(long netInUs, long logicUs, long netOutUs) {
+        LatencyBreakdown breakdown = new LatencyBreakdown(
+                System.currentTimeMillis(), // 1. timestamp
+                netInUs,                    // 2. netInUs
+                0,                          // 3. feeCalcUs (Default 0 para compatibilidad)
+                logicUs,                    // 4. logicUs
+                0,                          // 5. cfoUs (Default 0 para compatibilidad)
+                netOutUs                    // 6. netOutUs
+        );
+        latencyHistory.add(breakdown);
+
+        // Mantenimiento asíncrono del tamaño
+        if (latencyHistory.size() > MAX_HISTORY_SIZE) {
+            latencyHistory.pollFirst();
+        }
+    }
+    /**
+     * 🟢 MÉTODO RESTAURADO: Permite al Dashboard leer la historia reciente.
+     */
+    public java.util.Deque<LatencyBreakdown> getRecentLatencyHistory() {
+        return latencyHistory; // Retorna la colección concurrente directa
+    }
+    // --- 📝 API DE REGISTRO ---
+
+
+
+    /**
+     * Sobrecarga opcional: Si alguna vez necesitas registrar detalles específicos.
+     * (Mantiene compatibilidad con versiones anteriores si es necesario)
+     */
+    public void recordOp(String exchange, long latencyMs, boolean error) {
+        throughputCounter.increment();
+        if (error) {
+            errorCounts.computeIfAbsent(exchange, k -> new LongAdder()).increment();
+        }
+        // Opcional: registrar latencia en el mapa de estadísticas
+        // latencyStats.computeIfAbsent(exchange, k -> new LatencyStats()).record(latencyMs);
     }
 }

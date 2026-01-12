@@ -14,7 +14,8 @@
         .kpi { font-size: 28px; font-weight: bold; color: #fff; }
         .kpi-label { font-size: 10px; text-transform: uppercase; color: var(--muted); margin-bottom: 5px; letter-spacing: 1px; }
         table { width: 100%; border-collapse: collapse; font-size: 11px; }
-        td, th { padding: 3px 5px; border-bottom: 1px solid #222; text-align: left; }
+        td, th { padding: 5px 8px; border-bottom: 1px solid #222; }
+        .card table th { letter-spacing: 0.5px; color: var(--muted); border-bottom: 2px solid #222; }
 
         /* Nuevos Estilos Radar */
         .radar-score-high { color: var(--danger); font-weight: bold; animation: pulse 2s infinite; }
@@ -35,6 +36,7 @@
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: #000; }
         ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+
     </style>
 </head>
 <body>
@@ -45,14 +47,14 @@
         </div>
         <div style="text-align: right;">
             <div style="font-size: 10px; color: var(--muted);">UPTIME</div>
-            <div style="color: #fff;">20:58:11</div>
+            <div style="color: #fff;">18:28:41</div>
         </div>
     </div>
 
     <div class="grid">
         <div class="card" style="grid-row: span 2;">
             <div class="kpi-label">💰 BÓVEDA (INVENTARIO)</div>
-            <div style="max-height: 380px; overflow-y: auto;"><table style='table-layout: fixed; width: 100%;'><colgroup><col style='width: 40%;'><col style='width: 20%;'><col style='width: 40%;'></colgroup><tr style='color:var(--accent); font-size:10px;'><th>EXCHANGE</th><th>ASSET</th><th style='text-align:right'>QTY</th></tr></table></div>
+            <div style="max-height: 380px; overflow-y: auto;"><table style='table-layout: fixed; width: 100%;'><colgroup><col style='width: 35%;'><col style='width: 25%;'><col style='width: 40%;'></colgroup><tr style='color:var(--accent); font-size:10px;'><th>EXCHANGE</th><th>ASSET</th><th style='text-align:right'>QTY</th></tr><tr><td style='color:#666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;'>BINANCE</td><td style='font-weight:bold'>USDT</td><td style='text-align:right; color:#fff; font-family: monospace;'>500,0000</td></tr></table></div>
         </div>
 
         <div class="card" style="grid-row: span 2;">
@@ -60,7 +62,7 @@
             <div style="max-height: 380px; overflow-y: auto;">
                 <table style="width:100%">
                     <tr style="color:#666"><th>PAIR</th><th>SCORE</th><th>SPREAD</th><th>STATUS</th></tr>
-                    <tr><td colspan='4' style='text-align:center; padding:20px; color:#444'>🔭 ESCANEANDO MERCADO...</td></tr>
+                    <tr><td style='font-weight:bold; color:#fff'>SOL/USDT</td><td class='radar-score-high'>0,92</td><td class='radar-spread'>0,25%</td><td style='color:#777; font-size:10px'>🔥 ALTA VOLATILIDAD</td></tr><tr><td style='font-weight:bold; color:#fff'>WIF/USDT</td><td class='radar-score-high'>0,85</td><td class='radar-spread'>0,18%</td><td style='color:#777; font-size:10px'>👀 VIGILANDO</td></tr>
                 </table>
             </div>
         </div>
@@ -68,7 +70,7 @@
         <div class="card">
             <div class="kpi-label">PROFIT & LOSS (ESTIMADO)</div>
             <div class="kpi" style="color: #00ff9d">$0,0000</div>
-            <div style="font-size:10px; color:#666; margin-top:5px;">CYCLES: 1</div>
+            <div style="font-size:10px; color:#666; margin-top:5px;">CYCLES: 300</div>
         </div>
 
         <div class="card">
@@ -92,14 +94,14 @@
                 <tr style="color: #666;">
                     <th>TIME</th><th>PAIR</th><th>STAGE</th><th>DETAILS</th><th style="text-align:right;">DATA</th>
                 </tr>
-                <tr><td colspan='5' style='text-align:center; color:#333; padding:10px;'>NO ACTIVITY YET</td></tr>
+                <tr><td style='color:#555;'>41.095</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.095</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.095</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.095</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.095</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.095</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.095</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.094</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.094</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.094</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.094</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.094</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.094</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.094</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.094</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.093</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.093</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.093</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.093</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.093</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.093</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.093</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.093</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.093</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.093</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.092</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.092</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.092</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.092</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.092</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.092</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.092</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.092</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.091</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.091</td><td style='color:#ccc;'>SOL/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Casi...</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.091</td><td style='color:#ccc;'>BTC/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Ruido</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.091</td><td style='color:#ccc;'>BTC/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Ruido</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.091</td><td style='color:#ccc;'>BTC/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Ruido</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.091</td><td style='color:#ccc;'>BTC/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Ruido</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.091</td><td style='color:#ccc;'>BTC/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Ruido</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.091</td><td style='color:#ccc;'>BTC/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Ruido</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.091</td><td style='color:#ccc;'>BTC/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Ruido</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.090</td><td style='color:#ccc;'>BTC/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Ruido</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.090</td><td style='color:#ccc;'>BTC/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Ruido</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.090</td><td style='color:#ccc;'>BTC/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Ruido</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.090</td><td style='color:#ccc;'>BTC/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Ruido</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.090</td><td style='color:#ccc;'>BTC/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Ruido</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.090</td><td style='color:#ccc;'>BTC/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Ruido</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.090</td><td style='color:#ccc;'>BTC/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Ruido</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr><tr><td style='color:#555;'>41.089</td><td style='color:#ccc;'>BTC/USDT</td><td style='color:#444;'>👁 SCAN_IGNORED</td><td style='color:#777; font-size:9px;'>Ruido</td><td style='text-align:right; font-family:monospace; color:#aaa;'></td></tr>
             </table>
         </div>
 
         <div class="card" style="grid-column: span 1; max-height: 300px; overflow-y: auto;">
              <div class="kpi-label">📝 SYSTEM LOGS</div>
              <div style="font-family: monospace; color: #888; font-size: 10px; line-height: 1.4;">
-                [20:58:11] 🎯 RADAR ACTUALIZADO: 1 Activos
+                
              </div>
         </div>
     </div>
@@ -110,38 +112,38 @@
     <div class="cfg-card">
         <div class="cfg-section-title">🛑 CONTROL OPS</div>
         <div class="cfg-row"><span class="cfg-key">BOT_DRY_RUN</span><span class="cfg-val val-true">false</span></div>
-        <div class="cfg-row"><span class="cfg-key">CAPITAL_SEMILLA</span><span class="cfg-val val-num">300,0</span></div>
+        <div class="cfg-row"><span class="cfg-key">CAPITAL_SEMILLA</span><span class="cfg-val val-num">38,0</span></div>
     </div>
     <div class="cfg-card">
         <div class="cfg-section-title">💰 UMBRALES</div>
-        <div class="cfg-row"><span class="cfg-key">MIN_PROFIT</span><span class="cfg-val val-num">0,00</span></div>
-        <div class="cfg-row"><span class="cfg-key">NORMAL_PROFIT</span><span class="cfg-val val-num">0,00</span></div>
+        <div class="cfg-row"><span class="cfg-key">MIN_PROFIT</span><span class="cfg-val val-num">0,01</span></div>
+        <div class="cfg-row"><span class="cfg-key">NORMAL_PROFIT</span><span class="cfg-val val-num">0,01</span></div>
     </div>
     <div class="cfg-card">
         <div class="cfg-section-title">⚡ TOLERANCIAS RED</div>
-        <div class="cfg-row"><span class="cfg-key">MAX_LATENCY_MS</span><span class="cfg-val val-num">0</span></div>
-        <div class="cfg-row"><span class="cfg-key">MAX_SLIPPAGE</span><span class="cfg-val val-num">0,003</span></div>
+        <div class="cfg-row"><span class="cfg-key">MAX_LATENCY_MS</span><span class="cfg-val val-num">75</span></div>
+        <div class="cfg-row"><span class="cfg-key">MAX_SLIPPAGE</span><span class="cfg-val val-num">0,001</span></div>
     </div>
     <div class="cfg-card">
         <div class="cfg-section-title">⏱️ VELOCIDAD</div>
-        <div class="cfg-row"><span class="cfg-key">SCAN_INTERVAL</span><span class="cfg-val val-true">50ms</span></div>
+        <div class="cfg-row"><span class="cfg-key">SCAN_INTERVAL</span><span class="cfg-val val-true">30ms</span></div>
     </div>
     <div class="cfg-card">
         <div class="cfg-section-title">🧠 CEREBRO</div>
-        <div class="cfg-row"><span class="cfg-key">MIN_SPREAD</span><span class="cfg-val val-num">0,0000</span></div>
+        <div class="cfg-row"><span class="cfg-key">MIN_SPREAD</span><span class="cfg-val val-num">0,0001</span></div>
         <div class="cfg-row"><span class="cfg-key">ADVISOR</span><span class="cfg-val">BINANCE</span></div>
     </div>
     <div class="cfg-card" style="border-color: var(--danger);">
         <div class="cfg-section-title" style="color:var(--danger)">🛡️ RIESGO</div>
-        <div class="cfg-row"><span class="cfg-key">MAX_DAILY_LOSS</span><span class="cfg-val val-false">0,00%</span></div>
-        <div class="cfg-row"><span class="cfg-key">MAX_DRAWDOWN</span><span class="cfg-val val-false">0,00%</span></div>
-        <div class="cfg-row"><span class="cfg-key">MAX_STREAK</span><span class="cfg-val val-false">0</span></div>
+        <div class="cfg-row"><span class="cfg-key">MAX_DAILY_LOSS</span><span class="cfg-val val-false">5,00%</span></div>
+        <div class="cfg-row"><span class="cfg-key">MAX_DRAWDOWN</span><span class="cfg-val val-false">10,00%</span></div>
+        <div class="cfg-row"><span class="cfg-key">MAX_STREAK</span><span class="cfg-val val-false">3</span></div>
     </div>
     <div class="cfg-card">
         <div class="cfg-section-title">🔮 ORÁCULO</div>
-        <div class="cfg-row"><span class="cfg-key">Z_SCORE_THR</span><span class="cfg-val val-num">0,0</span></div>
-        <div class="cfg-row"><span class="cfg-key">MIN_CONFIDENCE</span><span class="cfg-val val-num">0,00</span></div>
-        <div class="cfg-row"><span class="cfg-key">AGGR_SPREAD</span><span class="cfg-val val-num">0,0000</span></div>
+        <div class="cfg-row"><span class="cfg-key">Z_SCORE_THR</span><span class="cfg-val val-num">10,0</span></div>
+        <div class="cfg-row"><span class="cfg-key">MIN_CONFIDENCE</span><span class="cfg-val val-num">0,01</span></div>
+        <div class="cfg-row"><span class="cfg-key">AGGR_SPREAD</span><span class="cfg-val val-num">0,0001</span></div>
     </div>
 </div>
 
@@ -166,7 +168,7 @@
             data: {
                 labels: ['Detectadas', 'Spread Bajo', 'Veto IA', 'Sin Liquidez', 'Lag Red', 'Err. Sistema', 'WINNERS'],
                 datasets: [{
-                    data: [0, 0, 0, 0, 0, 0, 0],
+                    data: [95, 95, 0, 0, 0, 0, 0],
                     backgroundColor: ['#333', '#555', '#7744aa', '#3366cc', '#cc6600', '#cc3333', '#00ff9d'],
                     borderRadius: 2
                 }]

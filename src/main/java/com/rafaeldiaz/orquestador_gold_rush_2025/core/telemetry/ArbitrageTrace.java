@@ -2,11 +2,12 @@ package com.rafaeldiaz.orquestador_gold_rush_2025.core.telemetry;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.UUID;
 
 /**
- * 🕵️ EXPEDIENTE DE AUDITORÍA
- * Captura la historia completa de una operación (o intento fallido)
- * para diagnóstico forense en el Dashboard.
+ * 🕵️ EXPEDIENTE DE AUDITORÍA (FORENSE V2.0)
+ * Captura la historia completa de una operación:
+ * Desde la promesa matemática hasta la realidad de la ejecución.
  */
 public class ArbitrageTrace {
 
@@ -16,9 +17,10 @@ public class ArbitrageTrace {
         SCAN_IGNORED,       // Spread bruto < MIN_SCAN_SPREAD
         ADVISOR_REJECTED,   // Spread neto < ADVISOR_MIN_SPREAD
         ORACLE_VETO,        // Oráculo detectó riesgo (Z-Score alto o baja confianza)
-        SLIPPAGE_EXCEEDED,  // Impacto en libro > MAX_SLIPPAGE
+        SLIPPAGE_EXCEEDED,  // Impacto estimado en libro > MAX_SLIPPAGE
         LATENCY_TIMEOUT,    // Ping > MAX_LATENCY_MS
         RISK_PAUSED,        // Circuit Breaker o Stop Loss diario activado
+        INSUFFICIENT_FUNDS, // 🛑 NUEVO: Rechazo por CFO (Saldo Virtual/Real)
 
         // 2. EJECUCIÓN (El disparo)
         ORDER_FAILED,       // API Error / Rechazo del Exchange
@@ -33,24 +35,35 @@ public class ArbitrageTrace {
         SYSTEM_MSG          // Logs generales del bot (Arranque, Config, etc)
     }
 
+    // IDENTIDAD
+    public final String traceId;        // UUID único para rastrear el evento
     public final String timestamp;
     public final String assetPair;      // Ej: "BTC/USDT"
     public final AuditStage stage;      // El estado actual
 
-    // EVIDENCIA (Valores en el momento del crimen)
+    // EVIDENCIA DE RECHAZO (Por qué no disparamos)
     public final double spreadFound;    // vs ADVISOR_MIN_SPREAD
-    public final double slippageCalc;   // vs MAX_SLIPPAGE
-    public final long latencyDetected;  // vs MAX_LATENCY_MS
-    public final double oracleScore;    // vs ORACLE_MIN_CONFIDENCE
+    public final double slippageCalc;   // Estimación pre-trade
+    public final long latencyDetected;  // Ping de red (CheckNetwork)
+    public final double oracleScore;    // Confianza del Oráculo
 
-    // RESULTADOS (Para operaciones reales)
-    public final double realProfit;
+    // EVIDENCIA FORENSE DE EJECUCIÓN (Realidad vs Expectativa)
+    public final double expectedProfit; // 🔮 Lo que prometió el Scanner
+    public final double realProfit;     // 💵 Lo que realmente ganamos
+    public final double realSlippage;   // 📉 Desviación de precio ((Real - Ideal) / Ideal)
+    public final long executionDuration; // ⏱️ Tiempo total (Start -> Finish) en ms
+
+    // DATOS DE CONTEXTO
     public final String exchangeA;
     public final String exchangeB;
     public final String extraMessage;   // Mensaje libre para detalles técnicos
 
-    // Constructor para RECHAZOS (Filtros)
+    /**
+     * CONSTRUCTOR 1: PARA RECHAZOS Y FILTROS
+     * (Cuando la oportunidad muere en el análisis)
+     */
     public ArbitrageTrace(String asset, AuditStage stage, String msg, double evidenceValue) {
+        this.traceId = UUID.randomUUID().toString().substring(0, 8);
         this.timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss.SSS"));
         this.assetPair = asset;
         this.stage = stage;
@@ -62,24 +75,41 @@ public class ArbitrageTrace {
         this.oracleScore = (stage == AuditStage.ORACLE_VETO) ? evidenceValue : 0;
         this.slippageCalc = (stage == AuditStage.SLIPPAGE_EXCEEDED) ? evidenceValue : 0;
 
+        // Valores nulos para ejecución
         this.exchangeA = "-";
         this.exchangeB = "-";
         this.realProfit = 0;
+        this.expectedProfit = 0;
+        this.realSlippage = 0;
+        this.executionDuration = 0;
     }
 
-    // Constructor para EJECUCIONES (Éxito, Falla o Huérfana)
-    public ArbitrageTrace(String asset, AuditStage stage, String exA, String exB, double profit, String msg) {
+    /**
+     * CONSTRUCTOR 2: PARA EJECUCIONES FORENSES (EL NUEVO ESTÁNDAR)
+     * (Cuando hubo dinero real en juego, ganemos o perdamos)
+     */
+    public ArbitrageTrace(String asset, AuditStage stage, String exA, String exB,
+                          double expectedProfit, double realProfit,
+                          long durationMs, double realSlippagePct, String msg) {
+
+        this.traceId = UUID.randomUUID().toString().substring(0, 8);
         this.timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss.SSS"));
         this.assetPair = asset;
         this.stage = stage;
         this.exchangeA = exA;
         this.exchangeB = exB;
-        this.realProfit = profit;
         this.extraMessage = msg;
 
+        // Métricas Forenses
+        this.expectedProfit = expectedProfit;
+        this.realProfit = realProfit;
+        this.executionDuration = durationMs;
+        this.realSlippage = realSlippagePct;
+
+        // Valores de filtro vacíos (ya pasamos los filtros)
         this.spreadFound = 0;
         this.slippageCalc = 0;
         this.latencyDetected = 0;
-        this.oracleScore = 0;
+        this.oracleScore = 0; // Podríamos pasarlo si queremos ver qué score tenía al entrar
     }
 }

@@ -20,6 +20,13 @@ import java.util.concurrent.TimeUnit;
 
 public class ExchangeConnector {
 
+    // 🚦 MODOS DE EJECUCIÓN (Crítico para HFT vs Seguridad)
+    public enum ExecutionMode {
+        FAST_LANE,   // Sin reintentos, timeout corto, lanza excepción inmediato (Para Scanning)
+        HEAVY_DUTY   // Con reintentos, backoff exponencial (Para Ejecución de Órdenes)
+    }
+
+    // Ofrece Configuración
     public interface EnvProvider {
         String get(String key);
     }
@@ -27,12 +34,17 @@ public class ExchangeConnector {
     // 📦 ESTRUCTURA DE DATOS PARA EL LIBRO DE ÓRDENES
     public record OrderBook(List<double[]> bids, List<double[]> asks) {}
 
+    // ESTADO INTERNO
     private final Map<String, Long> exchangeRTT = new ConcurrentHashMap<>();
     private final OkHttpClient client;
     private final ObjectMapper mapper;
     private final EnvProvider envProvider;
+
+    // CONFIGURACIÓN DE RED
     private static final int MAX_RETRIES = 3;
     private static final long INITIAL_BACKOFF_MS = 500;
+
+    // URLS BASE (Referencias)
     private static final String BYBIT_URL = "https://api.bybit.com";
     private static final String BINANCE_URL = "https://api.binance.com";
     private static final String MEXC_URL = "https://api.mexc.com";
@@ -43,7 +55,7 @@ public class ExchangeConnector {
         // 1. Dispatcher: Rompemos el límite de 5 peticiones por host.
         Dispatcher dispatcher = new Dispatcher();
         dispatcher.setMaxRequests(200);       // Capacidad global del cliente
-        dispatcher.setMaxRequestsPerHost(50); // ¡FUEGO LIBRE! Hasta 50 hilos contra Binance/Bybit a la vez.
+        dispatcher.setMaxRequestsPerHost(50); // ¡FUEGO LIBRE! Hasta 50 hilos a la vez.
 
         // 2. ConnectionPool: Mantenemos las conexiones TCP calientes.
         // Evita el "Handshake SSL" repetitivo que cuesta ~200ms cada vez.
@@ -63,10 +75,8 @@ public class ExchangeConnector {
 
         this.mapper = new ObjectMapper();
         Dotenv dotenvInstance = Dotenv.load();
-
         String currentIp = com.rafaeldiaz.orquestador_gold_rush_2025.utils.ExternalIpFetcher.getMyPublicIp();
-        BotLogger.info("🌐 IP PÚBLICA DETECTADA: " + currentIp + " (Asegúrate de que esta IP esté en las plataformas)");
-
+        BotLogger.info("🌐 IP PÚBLICA DETECTADA: " + currentIp + " (Verificar Whitelists)");
         this.envProvider = dotenvInstance::get;
     }
 
@@ -209,99 +219,102 @@ public class ExchangeConnector {
             default -> false;
         };
     }
-    public Request buildOrderRequest(String exchange, String pair,
-                                     String side, String type, double qty, double price) {
+    // =========================================================================
+    // 🌉 MÉTODO PUENTE (Mantiene compatibilidad con el resto del sistema)
+    // =========================================================================
+    public Request buildOrderRequest(String exchange, String pair, String side, String type, double qty, double price) {
+        // Por defecto, asumimos que NO es una orden por valor (isQuoteOrder = false)
+        return buildOrderRequest(exchange, pair, side, type, qty, price, false);
+    }
 
-        // 🧹 Preparación de datos comunes (Fast Path)
+    // =========================================================================
+    // ⚙️ MÉTODO MAESTRO (Con soporte para Quote Order / Bybit Market Unit)
+    // =========================================================================
+    public Request buildOrderRequest(String exchange, String pair,
+                                     String side, String type, double qty, double price, boolean isQuoteOrder) {
+
+        // 🧹 Preparación de datos comunes
         String cleanPair = pair.replace("-", "").toUpperCase();
         String sideCap = side.equalsIgnoreCase("BUY") ? "Buy" : "Sell";
-        // [OPTIMIZACIÓN] Usamos Locale.US para asegurar el punto decimal
-        String qtyStr = String.format(java.util.Locale.US, "%.8f", qty);
         String priceStr = String.format(java.util.Locale.US, "%.8f", price);
-
-        // [FOK UPDATE] Detección de intención
         boolean isFOK = type.equalsIgnoreCase("LIMIT_FOK");
-        // Si es LIMIT_FOK o LIMIT normal, para la API es un "Limit"
         String apiType = type.toUpperCase().contains("LIMIT") ? "Limit" : "Market";
 
-        // 🚀 SWITCH EXPRESSION (Java 21+ Style)
+        // Lógica para detectar si usamos Quote Order (Solo válido en Market Buys)
+        boolean useQuoteLogic = isQuoteOrder && apiType.equalsIgnoreCase("Market") && sideCap.equals("Buy");
+        String dynamicQtyStr;
+
+        // CÁLCULO DE CANTIDAD (Token vs USDT)
+        if (useQuoteLogic) {
+            // USDT: Usamos 4 decimales estándar (seguro para la mayoría de pares USDT)
+            dynamicQtyStr = String.format(java.util.Locale.US, "%.4f", qty);
+        } else {
+            // TOKENS: Usamos la precisión del activo
+            double stepSize = getStepSize(exchange, pair);
+            int decimals = (stepSize < 1) ? (int) -Math.log10(stepSize) : 0;
+            decimals = Math.max(0, Math.min(decimals, 8));
+            dynamicQtyStr = String.format(java.util.Locale.US, "%." + decimals + "f", qty);
+        }
+
         return switch (exchange.toLowerCase()) {
 
-            // 🟠 CASO 1: BYBIT V5
-// 🟠 CASO 1: BYBIT V5 (CORREGIDO: PRECISIÓN DINÁMICA)
+            // 🟠 BYBIT V5 (Ya probado y funcionando)
             case String s when s.contains("bybit") -> {
-
-                // 1. Obtener reglas de precisión del activo (StepSize)
-                double stepSize = getStepSize(exchange, pair);
-
-                // 2. Calcular cuántos decimales permite el exchange
-                int decimals = 0;
-                if (stepSize < 1) {
-                    // Matemáticas: log10(0.01) = -2 -> 2 decimales
-                    decimals = (int) -Math.log10(stepSize);
-                }
-                // Seguridad: Clamp entre 0 y 8 decimales
-                decimals = Math.max(0, Math.min(decimals, 8));
-
-                // 3. Formatear la cantidad exacta
-                String qtyFormat = "%." + decimals + "f";
-                String dynamicQtyStr = String.format(java.util.Locale.US, qtyFormat, qty);
-
+                String marketUnit = useQuoteLogic ? "quoteCoin" : "baseCoin";
                 String jsonPayload;
+
                 if (apiType.equalsIgnoreCase("Limit")) {
                     String tif = isFOK ? "FOK" : "GTC";
                     jsonPayload = """
-                {
-                    "category": "spot",
-                    "symbol": "%s",
-                    "side": "%s",
-                    "orderType": "Limit",
-                    "qty": "%s", 
-                    "price": "%s",
-                    "timeInForce": "%s"
-                }
-                """.formatted(cleanPair, sideCap, dynamicQtyStr, priceStr, tif); // Usamos dynamicQtyStr
+                    {
+                        "category": "spot", "symbol": "%s", "side": "%s", "orderType": "Limit",
+                        "qty": "%s", "price": "%s", "timeInForce": "%s"
+                    }
+                    """.formatted(cleanPair, sideCap, dynamicQtyStr, priceStr, tif);
                 } else {
                     jsonPayload = """
-                {
-                    "category": "spot",
-                    "symbol": "%s",
-                    "side": "%s",
-                    "orderType": "Market",
-                    "qty": "%s"
-                }
-                """.formatted(cleanPair, sideCap, dynamicQtyStr); // Usamos dynamicQtyStr
+                    {
+                        "category": "spot", "symbol": "%s", "side": "%s", "orderType": "Market",
+                        "qty": "%s", "marketUnit": "%s"
+                    }
+                    """.formatted(cleanPair, sideCap, dynamicQtyStr, marketUnit);
                 }
                 yield buildSignedRequest(exchange, "POST", "/v5/order/create", jsonPayload);
             }
-            // 🟡 CASO 2: BINANCE & MEXC
-            case "binance", "mexc" -> {
-                String binanceType = apiType.toUpperCase(); // API requiere UPPERCASE (LIMIT, MARKET)
 
-                // Template base
-                String queryBase = "symbol=%s&side=%s&type=%s&quantity=%s".formatted(
-                        cleanPair, side.toUpperCase(), binanceType, qtyStr
-                );
-                StringBuilder query = new StringBuilder(queryBase);
+            // 🟡 BINANCE & MEXC (¡AHORA REPARADO!)
+            case "binance", "mexc" -> {
+                String binanceType = apiType.toUpperCase();
+                StringBuilder query = new StringBuilder();
+                query.append("symbol=").append(cleanPair);
+                query.append("&side=").append(side.toUpperCase());
+                query.append("&type=").append(binanceType);
+
+                // 🔥 CORRECCIÓN AQUÍ: Usar 'quoteOrderQty' si es por Valor
+                if (useQuoteLogic && exchange.equalsIgnoreCase("binance")) {
+                    // Binance usa 'quoteOrderQty' para gastar USDT exactos
+                    query.append("&quoteOrderQty=").append(dynamicQtyStr);
+                    BotLogger.info("🛒 BINANCE: Quote Order (Gastar USDT) -> " + dynamicQtyStr);
+                } else if (useQuoteLogic && exchange.equalsIgnoreCase("mexc")) {
+                    // MEXC también soporta quoteOrderQty en V3
+                    query.append("&quoteOrderQty=").append(dynamicQtyStr);
+                    BotLogger.info("🛒 MEXC: Quote Order (Gastar USDT) -> " + dynamicQtyStr);
+                } else {
+                    // Modo clásico (Tokens)
+                    query.append("&quantity=").append(dynamicQtyStr);
+                }
 
                 if (binanceType.equals("LIMIT")) {
-                    // [FOK UPDATE] Binance/MEXC usan timeInForce en el query param
                     String tif = isFOK ? "FOK" : "GTC";
                     query.append("&price=").append(priceStr).append("&timeInForce=").append(tif);
                 }
 
                 long timestamp = java.time.Instant.now().toEpochMilli();
-
-                // Pequeña diferencia interna manejada con if simple
-                if (exchange.equalsIgnoreCase("mexc")) {
-                    query.append("&timestamp=").append(timestamp);
-                } else {
-                    query.append("&timestamp=").append(timestamp).append("&recvWindow=5000");
-                }
+                if (exchange.equalsIgnoreCase("mexc")) query.append("&timestamp=").append(timestamp);
+                else query.append("&timestamp=").append(timestamp).append("&recvWindow=5000");
 
                 String signature = hmacSha256(query.toString(), getApiSecret(exchange));
                 String baseUrl = exchange.equalsIgnoreCase("binance") ? BINANCE_URL : MEXC_URL;
-                // Usamos String.format clásico para evitar líos con % en URLs
                 String finalUrl = baseUrl + "/api/v3/order?" + query + "&signature=" + signature;
 
                 yield new Request.Builder()
@@ -312,84 +325,76 @@ public class ExchangeConnector {
                         .build();
             }
 
-            // 🟢 CASO 3: KUCOIN
+            // 🟢 KUCOIN (¡AHORA REPARADO!)
             case "kucoin" -> {
                 String kPair = pair.contains("-") ? pair : pair.replace("USDT", "-USDT").replace("USDC", "-USDC");
                 String clientOid = java.util.UUID.randomUUID().toString();
                 String jsonPayload;
 
                 if (apiType.equalsIgnoreCase("Limit")) {
-                    // [FOK UPDATE] KuCoin usa timeInForce dentro del JSON
+                    // Limit siempre es por tamaño (size)
                     String tif = isFOK ? "FOK" : "GTC";
                     jsonPayload = """
-                {
-                    "clientOid": "%s",
-                    "side": "%s",
-                    "symbol": "%s",
-                    "type": "limit",
-                    "price": "%s",
-                    "size": "%s",
-                    "timeInForce": "%s"
-                }
-                """.formatted(clientOid, side.toLowerCase(), kPair, priceStr, qtyStr, tif);
+                    {
+                        "clientOid": "%s", "side": "%s", "symbol": "%s", "type": "limit",
+                        "price": "%s", "size": "%s", "timeInForce": "%s"
+                    }
+                    """.formatted(clientOid, side.toLowerCase(), kPair, priceStr, dynamicQtyStr, tif);
                 } else {
-                    jsonPayload = """
-                {
-                    "clientOid": "%s",
-                    "side": "%s",
-                    "symbol": "%s",
-                    "type": "market",
-                    "size": "%s"
-                }
-                """.formatted(clientOid, side.toLowerCase(), kPair, qtyStr);
+                    // 🔥 CORRECCIÓN AQUÍ: KuCoin usa 'funds' para gastar USDT
+                    if (useQuoteLogic) {
+                        jsonPayload = """
+                        {
+                            "clientOid": "%s", "side": "%s", "symbol": "%s", "type": "market",
+                            "funds": "%s"
+                        }
+                        """.formatted(clientOid, side.toLowerCase(), kPair, dynamicQtyStr); // 'funds' es USDT
+                        BotLogger.info("🛒 KUCOIN: Quote Order (Funds) -> " + dynamicQtyStr);
+                    } else {
+                        jsonPayload = """
+                        {
+                            "clientOid": "%s", "side": "%s", "symbol": "%s", "type": "market",
+                            "size": "%s"
+                        }
+                        """.formatted(clientOid, side.toLowerCase(), kPair, dynamicQtyStr); // 'size' es Tokens
+                    }
                 }
                 yield buildKucoinRequest("POST", "/api/v1/orders", jsonPayload);
             }
-            // 🔵 CASO 4: OKX (¡EL GIGANTE!)
+
+            // 🔵 OKX (¡AHORA REPARADO!)
             case "okx" -> {
-                // 1. Obtener símbolo con guión (BTC-USDT) vía Registry
-                // AHORA (Línea corregida)
-// Eliminamos guiones antes de quitar USDT para evitar residuos como "ETH-"
-                String symbol = com.rafaeldiaz.orquestador_gold_rush_2025.
-                        core.platform.ExchangeRegistry
-                        .toExchangeSymbol("okx", pair.replace(
-                                "-", "").replace("USDT", ""), "USDT");
-
-                // 2. Normalizar Side
-                String sideOkx = side.toLowerCase(); // "buy" o "sell"
-
-                // 3. Normalizar Tipo (OKX soporta 'limit', 'market', 'fok', 'ioc')
+                String symbol = com.rafaeldiaz.orquestador_gold_rush_2025.core.platform.ExchangeRegistry
+                        .toExchangeSymbol("okx", pair.replace("-", "").replace("USDT", ""), "USDT");
+                String sideOkx = side.toLowerCase();
                 String typeOkx = "limit";
                 if (type.toUpperCase().contains("MARKET")) typeOkx = "market";
-                else if (type.toUpperCase().contains("FOK")) typeOkx = "fok"; // Fill-or-Kill nativo
+                else if (type.toUpperCase().contains("FOK")) typeOkx = "fok";
 
-                // 4. Construir JSON
-                // OKX Spot requiere tdMode: "cash"
+                // 🔥 CORRECCIÓN AQUÍ: Definir 'tgtCcy' (Target Currency)
+                String tgtCcy = "base_ccy"; // Default (Tokens)
+                if (useQuoteLogic) {
+                    tgtCcy = "quote_ccy"; // Gastar USDT
+                    BotLogger.info("🛒 OKX: Quote Order (Quote Currency) -> " + dynamicQtyStr);
+                }
+
                 String jsonPayload = """
                 {
-                    "instId": "%s",
-                    "tdMode": "cash",
-                    "side": "%s",
-                    "ordType": "%s",
-                    "sz": "%s"
+                    "instId": "%s", "tdMode": "cash", "side": "%s", "ordType": "%s",
+                    "sz": "%s", "tgtCcy": "%s"
                     %s
                 }
                 """.formatted(
-                        symbol,
-                        sideOkx,
-                        typeOkx,
-                        String.format(java.util.Locale.US, "%.8f", qty), // Cantidad (Base Asset)
-                        // Inyectamos precio si NO es Market
-                        !typeOkx.equals("market") ? ", \"px\": \"" + String.format(java.util.Locale.US, "%.8f", price) + "\"" : ""
+                        symbol, sideOkx, typeOkx,
+                        dynamicQtyStr, // sz (cantidad)
+                        tgtCcy,        // base_ccy (tokens) o quote_ccy (USDT)
+                        !typeOkx.equals("market") ? ", \"px\": \"" + priceStr + "\"" : ""
                 );
-
-                // 5. Retornar Request Firmado
                 yield buildOkxRequest("POST", "/api/v5/trade/order", jsonPayload);
             }
 
-            // ⚪ DEFAULT
             default -> {
-                BotLogger.error("❌ Exchange no soportado para órdenes: " + exchange);
+                BotLogger.error("❌ Exchange no soportado: " + exchange);
                 yield null;
             }
         };
@@ -581,10 +586,26 @@ public class ExchangeConnector {
     // 🛡️ PUBLIC METHODS: TRADING & ACCOUNT (HEAVY DUTY)
     // =========================================================================
 
+    // =========================================================================
+    // 1️⃣ MÉTODO PUENTE (Retro-compatibilidad)
+    // Este método es el que llama el resto de tu sistema actualmente.
+    // Simplemente redirige al método nuevo pasando 'false' por defecto.
+    // =========================================================================
     public com.rafaeldiaz.orquestador_gold_rush_2025.model.OrderResult placeOrder(String exchange, String pair, String side, String type, double qty, double price) {
+        // Por defecto: isQuoteOrder = false (Comportamiento clásico por tokens)
+        return placeOrder(exchange, pair, side, type, qty, price, false);
+    }
+
+    // =========================================================================
+    // 2️⃣ MÉTODO MAESTRO SOBRECARGADO (La nueva lógica)
+    // Recibe el flag 'isQuoteOrder' y lo pasa al builder.
+    // =========================================================================
+    public com.rafaeldiaz.orquestador_gold_rush_2025.model.OrderResult placeOrder(String exchange, String pair, String side, String type, double qty, double price, boolean isQuoteOrder) {
         String orderId = null;
         try {
-            Request request = buildOrderRequest(exchange, pair, side, type, qty, price);
+            // 🔥 CAMBIO CRÍTICO: Llamamos al buildOrderRequest que acepta el booleano
+            Request request = buildOrderRequest(exchange, pair, side, type, qty, price, isQuoteOrder);
+
             if (request == null) throw new RuntimeException("Request malformado " + exchange);
 
             // 🛡️ HEAVY DUTY: Reintentar si hay fallo de red al enviar orden es CRÍTICO
@@ -608,7 +629,7 @@ public class ExchangeConnector {
                     if (root.has("orderId")) orderId = root.get("orderId").asText();
                 } else if (exchange.equalsIgnoreCase("kucoin")) {
                     if (root.get("code").asText().equals("200000")) orderId = root.get("data").get("orderId").asText();
-                } else if (exchange.equalsIgnoreCase("okx")) { // <--- 🔴 NUEVO BLOQUE OKX
+                } else if (exchange.equalsIgnoreCase("okx")) {
                     // OKX Success Code = "0"
                     if (root.path("code").asText().equals("0")) {
                         // El ID viene en un array data[]
@@ -626,11 +647,10 @@ public class ExchangeConnector {
             return fetchOrderResult(exchange, orderId, pair);
 
         } catch (Exception e) {
-            BotLogger.error("💥 CRITICAL PLACE ORDER: " + e.getMessage());
+            BotLogger.error("💥 CRITICAL PLACE ORDER (QuoteMode=" + isQuoteOrder + "): " + e.getMessage());
             return new com.rafaeldiaz.orquestador_gold_rush_2025.model.OrderResult("ERROR", "FAILED", 0, 0, 0, 0, 0, "NONE");
         }
     }
-
     public double fetchBalance(String exchange, String asset) {
         if (exchange == null || asset == null) return 0.0;
         try {
@@ -848,6 +868,9 @@ public class ExchangeConnector {
     // =========================================================================
     public double[] fetchDynamicTradingFee(String exchange, String pair) {
         try {
+            if (exchange.equalsIgnoreCase("mexc")) {
+                return new double[]{0.0, 0.0}; // {Taker, Maker} -> GRATIS
+            }
             if (exchange.toLowerCase().contains("bybit")) {
                 return getBybitTradingFee(pair);
             } else if (exchange.equalsIgnoreCase("binance")) {
@@ -1265,28 +1288,34 @@ public class ExchangeConnector {
 // =========================================================================
     // 🛡️ NÚCLEO DE EJECUCIÓN (CON ADICIÓN DE SEGURIDAD)
     // =========================================================================
+    // =========================================================================
+    // ⚡ NÚCLEO DE EJECUCIÓN (HARMONIZADO)
+    // =========================================================================
+
+    /**
+     * Ejecuta una petición HTTP gestionando latencia, métricas y reintentos según el modo.
+     */
     private Response executeRequest(Request request, ExecutionMode mode) throws IOException {
 
         // ➕ [ADICIÓN CRÍTICA] 🛡️ CHECK DE INTEGRIDAD
-        // Si el request es null (porque faltan llaves de OKX o falló el builder),
-        // lanzamos excepción controlada AQUÍ para evitar el crash de NullPointerException abajo.
         if (request == null) {
             throw new IOException("Request Nulo: Operación abortada por falta de credenciales o error interno.");
         }
 
         // [CÓDIGO ORIGINAL INTACTO]
-        String exchangeHost = request.url().host().replace("api.", "").replace(".com", ""); // Limpieza simple del nombre
+        String exchangeHost = request.url().host().replace("api.", "").replace(".com", "");
         long startTime = System.nanoTime(); // ⏱️ Reloj de alta precisión
         boolean success = false;
 
         try {
             if (mode == ExecutionMode.FAST_LANE) {
-                // 🏎️ CARRIL RÁPIDO
+                // 🏎️ CARRIL RÁPIDO (Fast Lane)
+                // Diseñado para fallar rápido. Si la red parpadea, no reintentamos, pasamos al siguiente activo.
                 try {
                     Response response = client.newCall(request).execute();
                     if (!response.isSuccessful()) {
                         response.close();
-                        // 🔴 Registro de Error
+                        // 🔴 Registro de Error en Dashboard
                         MetricsService.get().recordError(exchangeHost);
                         throw new IOException("FastLane Fail: " + response.code());
                     }
@@ -1297,77 +1326,73 @@ public class ExchangeConnector {
                     throw e;
                 }
             } else {
-                // 🛡️ CARRIL PESADO (Con reintentos internos)
-                // Nota: Medimos la latencia del bloque completo de reintentos
+                // 🛡️ CARRIL PESADO (Heavy Duty)
+                // Diseñado para persistir. Usado para poner órdenes donde NO podemos permitirnos fallar.
                 Response response = executeWithRetry(request);
                 success = true;
                 return response;
             }
         } finally {
-            // 📏 CÁLCULO DE LATENCIA (Siempre se ejecuta, éxito o fallo)
+            // 📏 CÁLCULO DE LATENCIA (Siempre se ejecuta)
             long durationMs = (System.nanoTime() - startTime) / 1_000_000;
 
-            // Solo registramos latencia si hubo éxito o intento de conexión real.
-            // Si falló por timeout, cuenta como latencia alta.
+            // 1. Registrar en el Singleton de Métricas (Para el Dashboard Global)
             MetricsService.get().recordLatency(exchangeHost, durationMs);
+
+            // 2. Registrar en el mapa interno (Para consultas rápidas locales)
             recordLatency(exchangeHost, durationMs);
-            // Si el modo pesado falló tras todos los reintentos, el catch interno ya lo manejó,
-            // pero aquí aseguramos el registro si el flag success sigue en false.
+
+            // Registro de error final si Heavy Duty falló después de todo
             if (!success && mode == ExecutionMode.HEAVY_DUTY) {
                 MetricsService.get().recordError(exchangeHost);
             }
         }
     }
-    // Tu método executeWithRetry original, pero optimizado para no ser tan agresivo
+
+    /**
+     * Lógica de reintentos para operaciones críticas (Heavy Duty).
+     */
     private Response executeWithRetry(Request request) throws IOException {
-        int attempt = 0;
-        long backoff = 200; // Reducido de 500ms a 200ms inicial
         IOException lastException = null;
 
-        while (attempt < MAX_RETRIES) {
-            long startTime = System.currentTimeMillis();
+        for (int i = 0; i < MAX_RETRIES; i++) {
             try {
                 Response response = client.newCall(request).execute();
-
-                // Métrica de RTT
-                recordLatency(request.url().host(), System.currentTimeMillis() - startTime);
-
-                if (response.isSuccessful() || response.code() == 500) { // A veces 500 es body útil en algunos exchanges
+                if (response.isSuccessful()) {
                     return response;
                 }
-
-                // Manejo de Rate Limit
-                if (response.code() == 429) {
-                    BotLogger.warn("🚦 RATE LIMIT " + request.url().host());
-                    backoff = 2000; // Castigo
-                }
-
                 response.close();
+                // Si el servidor responde 5xx, reintentamos. Si es 4xx (User Error), quizás no deberíamos,
+                // pero por seguridad en HFT asumimos error transitorio primero.
             } catch (IOException e) {
                 lastException = e;
             }
 
-            attempt++;
-            if (attempt >= MAX_RETRIES) break;
-
+            // Backoff Exponencial: 500ms, 1000ms, 1500ms...
             try {
-                // En Java 25 Virtual Threads, esto es barato
-                Thread.sleep(backoff);
-            } catch (InterruptedException e) {
+                Thread.sleep(INITIAL_BACKOFF_MS * (i + 1));
+            } catch (InterruptedException ignored) {
                 Thread.currentThread().interrupt();
-                throw new IOException("Interrupted");
+                throw new IOException("Interrumpido durante retry");
             }
-            backoff *= 1.5; // Crecimiento más suave
         }
-        throw (lastException != null) ? lastException : new IOException("Failed after retries");
+        throw new IOException("HeavyDuty Falló tras " + MAX_RETRIES + " intentos. Causa: " + (lastException != null ? lastException.getMessage() : "Desconocida"));
     }
 
-    private void recordLatency(String host, long rtt) {
-        if (rtt <= 0) return; // Ignorar
-        if (host.contains("binance")) exchangeRTT.put("binance", rtt);
-        else if (host.contains("bybit")) exchangeRTT.put("bybit", rtt);
-        else if (host.contains("mexc")) exchangeRTT.put("mexc", rtt);
-        else if (host.contains("kucoin")) exchangeRTT.put("kucoin", rtt);
+    /**
+     * Actualiza el mapa local de latencias (usado para health checks internos).
+     */
+    private void recordLatency(String exchange, long ms) {
+        exchangeRTT.put(exchange, ms);
+    }
+
+    // --- MÉTODOS PÚBLICOS DE UTILIDAD ---
+
+    /**
+     * Obtiene la latencia más reciente registrada para un exchange.
+     */
+    public long getLatency(String exchange) {
+        return exchangeRTT.getOrDefault(exchange, 0L);
     }
     // =========================================================================
     // 📏 7. NORMALIZACIÓN DE ÓRDENES (CALIBRADO PARA BYBIT V5 SPOT)
@@ -1504,8 +1529,5 @@ public class ExchangeConnector {
     public long getRTT(String exchange) {
         return exchangeRTT.getOrDefault(exchange.toLowerCase(), -1L);
     }
-    public enum ExecutionMode {
-        FAST_LANE,   // Para precios/libros: Sin reintentos, Fail-Fast.
-        HEAVY_DUTY   // Para órdenes/saldos: Reintentos robustos.
-    }
+
 }

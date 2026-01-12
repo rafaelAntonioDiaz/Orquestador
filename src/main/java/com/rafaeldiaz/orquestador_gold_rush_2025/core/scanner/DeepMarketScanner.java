@@ -22,7 +22,9 @@ import com.rafaeldiaz.orquestador_gold_rush_2025.execution.RiskManager;
 import com.rafaeldiaz.orquestador_gold_rush_2025.execution.TriangularExecutor;
 import com.rafaeldiaz.orquestador_gold_rush_2025.model.ArbitrageOpportunity;
 import com.rafaeldiaz.orquestador_gold_rush_2025.model.BalanceSnapshot;
+import com.rafaeldiaz.orquestador_gold_rush_2025.model.LatencyBreakdown;
 import com.rafaeldiaz.orquestador_gold_rush_2025.utils.BotLogger;
+import com.rafaeldiaz.orquestador_gold_rush_2025.utils.DecisionAuditor;
 
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
@@ -59,16 +61,18 @@ public class DeepMarketScanner implements MarketListener {
     private final List<ArbitrageStrategy> strategies = new ArrayList<>();
     private final List<String> huntingGrounds = new CopyOnWriteArrayList<>(BotConfig.HUNTING_GROUNDS_SEED);
 
-    // Estado
+    // Estado y Métricas
     private volatile BalanceSnapshot currentSnapshot = new BalanceSnapshot(Collections.emptyMap(), 0L);
     private boolean dryRun = BotConfig.DRY_RUN;
     private final AtomicLong tradesCount = new AtomicLong(0);
     private final DoubleAdder totalPotentialProfit = new DoubleAdder();
-    // [NEON] 💾 VARIABLES PARA EL DASHBOARD CYBERPUNK
+
+    // [NEON] 💾 DASHBOARD & METRICS
     private final DashboardService dashboard = new DashboardService();
+    private final MetricsService metricsService; // Singleton access o inyección
     private final java.util.Map<String, Long> networkLatencies = new java.util.concurrent.ConcurrentHashMap<>();
     private final AtomicLong cyclesCount = new AtomicLong(0);
-    private final java.time.Instant bootTime = java.time.Instant.now();
+
     // Hilos
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     private final ExecutorService virtualExecutor = Executors.newVirtualThreadPerTaskExecutor();
@@ -76,24 +80,24 @@ public class DeepMarketScanner implements MarketListener {
     public DeepMarketScanner(ExchangeConnector connector, ExecutionCoordinator coordinator) {
         this.connector = connector;
         this.coordinator = coordinator;
+        // 0. Enlazar Métricas (Singleton por defecto si no se pasa en constructor)
+        this.metricsService = new MetricsService();
 
         // 1. Provider (Con caché métricas y anti-stampede)
         this.dataProvider = new CachingMarketDataProvider(connector);
 
         // 2. Servicios Auxiliares
         this.feeManager = new com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.FeeManager(connector);
-        this.cfo = new PortfolioHealthManager(connector); // <--- CORREGIDO: Asignamos al campo 'this.cfo'
+        this.cfo = new PortfolioHealthManager(connector);
         this.balanceReporter = new GlobalBalanceReporter(connector);
 
         // 3. Cerebro (MarketListener: this)
-        // Nota: Pasamos 'this.cfo'
         this.pairSelector = new DynamicPairSelector(connector, this, this.feeManager, this.cfo);
 
         // 4. Estimador Financiero
-        this.profitEstimator = new StandardProfitEstimator(this.feeManager, BotConfig.TEST_CAPITALS);
+        this.profitEstimator = new StandardProfitEstimator(this.feeManager, this.cfo, BotConfig.TEST_CAPITALS);
 
-        // 5. Estrategias
-        // --- INICIALIZACIÓN ORACLE ---
+        // 5 ORACLE
         this.cortex = new MarketCortex();
         this.oracle = new ProbabilisticOracle(this.cortex);
 
@@ -101,16 +105,17 @@ public class DeepMarketScanner implements MarketListener {
             strategies.add(new AdaptiveSpatialStrategy(this.cfo));
         }
 
-            // 6. Ejecutores
+        // 6. Ejecutores
         RiskManager riskPolice = new RiskManager(BotConfig.SEED_CAPITAL, coordinator);
         this.crossExecutor = new CrossTradeExecutor(connector, riskPolice, coordinator);
         this.triangularExecutor = new TriangularExecutor(connector);
         setDryRun(this.dryRun);
+        //  7. Métricas del sistema
     }
 
 
     public void startOmniScan(int durationMinutes) {
-        BotLogger.info("⚡ AGENTE TOKIO v4.3: INTEGRIDAD VERIFICADA");
+        BotLogger.info("⚡ AGENTE TOKIO v4.5: DASHBOARD ACTIVADO");
        // printHeader(); // Restauramos el header visual v3.1
 
         pairSelector.start();
@@ -121,15 +126,22 @@ public class DeepMarketScanner implements MarketListener {
         // [NEON] 1. PROBADOR DE RED (Ping Real cada 5s)
         scheduler.scheduleWithFixedDelay(this::pingNetwork, 2, 5, TimeUnit.SECONDS);
 
-        // [NEON] 2. INTERFAZ CYBERPUNK (Refresco visual cada 3s)
+        // [NEON] 2. Generación Visual () INTERFAZ CYBERPUNK (Hilo Lento, Refresco visual cada 3s)
         scheduler.scheduleAtFixedRate(this::printCyberpunkDashboard, 3, 3, TimeUnit.SECONDS);
+
         Thread.ofVirtual().start(() -> {
             long endTime = System.currentTimeMillis() + (durationMinutes * 60 * 1000L);
             while (System.currentTimeMillis() < endTime) {
+                long cycleStart = System.currentTimeMillis();
                 try {
-                    scanCycle();
-                    // Throttle dinámico para CPU
-                    Thread.sleep(BotConfig.MAX_LATENCY_MS);
+                    scanCycle(); // Ahora esto es rápido y el dashboard no bloquea
+                    // ⏱️ CONTROL DE RITMO DE PRECISIÓN
+                    long executionTime = System.currentTimeMillis() - cycleStart;
+                    long sleepTime = BotConfig.SCAN_INTERVAL_MS - executionTime;
+
+                    // Solo dormimos si el ciclo fue más rápido que el intervalo definido
+                    // Si el ciclo tardó 60ms y el intervalo es 50ms, NO dormimos (Catch up)
+                    if (sleepTime > 0) { Thread.sleep(sleepTime);}
                 } catch (InterruptedException e) { break; }
             }
             shutdown();
@@ -137,42 +149,64 @@ public class DeepMarketScanner implements MarketListener {
     }
 
     private void scanCycle() {
-        // FASE 1: Fetch Global
+        // =============================================================
+        // 1. FASE DE PERCEPCIÓN (LEER EL MERCADO)
+        // =============================================================
+
+        // A. Descarga masiva de precios (Fast)
         Map<String, Map<String, Double>> prices = dataProvider.fetchGlobalPrices(BotConfig.getActiveExchanges());
         if (prices.isEmpty()) return;
+
+        // B. Obtener precio de referencia (Para calcular valor en USDT)
         Map<String, Double> refPrices =
-                prices.getOrDefault(BotConfig.
-                        getAdvisorRefExchange(), prices.values().iterator().next());
-        // 🔥 FASE 1.1: INGESTA PARALELA (Sidecar)
-        // Alimentamos el Cortex sin bloquear el flujo principal
+                prices.getOrDefault(BotConfig.getAdvisorRefExchange(), prices.values().iterator().next());
+
+        // C. Ingesta Paralela al Cerebro (No bloquea)
         virtualExecutor.submit(() -> cortex.ingest(prices));
-        // FASE 1.5: Prefetch (Con TrafficController interno en Provider)
+
+        // D. Prefetch Inteligente de Libros de Órdenes (Solo lo que nos interesa)
         dataProvider.prefetchOrderBooks(huntingGrounds, BotConfig.getActiveExchanges()).join();
 
-        // FASE 2: Pipeline de Estrategias
+
+        // =============================================================
+        // 2. FASE DE RAZONAMIENTO (BUSCAR OPORTUNIDADES)
+        // =============================================================
         try (var scope = Executors.newVirtualThreadPerTaskExecutor()) {
             List<Callable<Void>> tasks = huntingGrounds.stream().map(asset -> (Callable<Void>) () -> {
+                // Aquí dentro ocurre la magia: Estrategia -> Oráculo -> Ejecución
                 processAssetWithOracle(asset, prices);
                 return null;
             }).toList();
             scope.invokeAll(tasks);
         } catch (InterruptedException ignored) {}
 
+
+        // =============================================================
+        // 3. FASE DE MANTENIMIENTO Y TELEMETRÍA (NO BLOQUEANTE)
+        // =============================================================
+
+        // A. Limpiar caché vieja para no operar con datos rancios
         dataProvider.invalidateCache();
-        MetricsService.get().recordOp();
-        cyclesCount.incrementAndGet();
-        // [NEON] ACTUALIZAR DASHBOARD HTML
-        dashboard.updateNetwork(networkLatencies);
-        dashboard.updateStats(cyclesCount.get(), totalPotentialProfit.sum());
 
-        // Pasamos datos del Oráculo (si los tenemos a mano, o 0.0)
-        // Para simplificar, puede pasar 0.0 por ahora o capturar el último 'verdict'
+        // B. Registrar "Latido" del sistema (ESTO ES recordOp)
+        // Solo incrementa un contador (+1 ciclo). No toca dinero.
+        metricsService.recordOp();
+        long currentCycles = cyclesCount.incrementAndGet();
 
-        dashboard.updateInventory(currentSnapshot.balances(),refPrices);
-        dashboard.updateStats(cyclesCount.get(), totalPotentialProfit.sum());
-        dashboard.generate();
+        // C. Actualizar datos en MEMORIA para el Dashboard (Rápido)
+        // Pasamos el PnL acumulado y los ciclos
+        dashboard.updateStats(currentCycles, totalPotentialProfit.sum());
+
+        // D. Actualizar la "Foto del Dinero" en el Dashboard
+        // OJO: 'currentSnapshot' ya se actualizó en otro hilo (refreshBalances).
+        // Aquí solo se lo pasamos al dashboard para que lo pinte cuando pueda.
+        if (refPrices != null) {
+            dashboard.updateInventory(currentSnapshot.balances(), refPrices);
+        }
+
+        // 🛑 IMPORTANTE: NO llamamos a dashboard.generate() aquí.
+        // Eso lo hace el hilo lento (scheduler) cada 1 segundo.
     }
-
     private void processAsset(String asset, Map<String, Map<String, Double>> prices) {
         for (ArbitrageStrategy strategy : strategies) {
             // ETAPA 1: El Radar (Ya tiene su log interno en la estrategia, aquí recibimos los candidatos)
@@ -187,36 +221,23 @@ public class DeepMarketScanner implements MarketListener {
                 if (verified != null) {
                     // 🚩 BANDERA VERDE: PASA A EJECUCIÓN
                     // Registramos que sobrevivió a los Fees y al Inventario
-                    com.rafaeldiaz.orquestador_gold_rush_2025.utils.DecisionAuditor.log(
+                    DecisionAuditor.log(
                             opp.strategyType(),
                             asset,
-                            route,
+                            verified.buyExchange() + "->" + verified.sellExchange(),
                             opp.grossSpreadPct(),
                             verified.expectedProfit(),
                             "FINANCIERO",
                             "APROBADO",
-                            "Profit Neto: $" + String.format("%.4f", verified.expectedProfit())
+                            "Pase a Ejecución"
                     );
-
                     executeOpportunity(verified);
 
-                } else {
-                    // 🏳️ BANDERA BLANCA: MUERTE SILENCIOSA
-                    // Aquí es donde mueren tus trades hoy. El auditor nos dirá si fue por fees o saldo.
-                    com.rafaeldiaz.orquestador_gold_rush_2025.utils.DecisionAuditor.log(
-                            opp.strategyType(),
-                            asset,
-                            route,
-                            opp.grossSpreadPct(),
-                            -1.0, // PnL no calculado o negativo
-                            "FINANCIERO",
-                            "RECHAZADO",
-                            "Fees excesivos, PnL negativo o Sin Saldo en " + opp.sellExchange()
-                    );
                 }
             }
         }
     }
+
     private void executeOpportunity(ArbitrageOpportunity opp) {
         // Restauramos los logs visuales de v3.1
         printFormattedLog(opp);
@@ -224,7 +245,12 @@ public class DeepMarketScanner implements MarketListener {
         if (dryRun) {
             totalPotentialProfit.add(opp.expectedProfit());
             tradesCount.incrementAndGet();
-            return;
+            dashboard.registrarTrazaDecision(
+                    opp.asset(),
+                    ArbitrageTrace.AuditStage.EXIT_FILLED,
+                    "WIN (SIM)",
+                    opp.expectedProfit()
+            );            return;
         }
 
         long timestamp = currentSnapshot.timestamp();
@@ -292,18 +318,38 @@ public class DeepMarketScanner implements MarketListener {
     }
 
     private void printFormattedLog(ArbitrageOpportunity opp) {
-        // Formato Estandarizado [INFO] - Fácil de leer para humanos y parsers
-        // Ejemplo: ORDER_FILLED | WIF/USDT | Spread: 1.2% | PnL: $0.45 | Src: ORACLE
+        // 🎨 Estilo Visual:
+        // CYAN   -> Evento (MATCH_FOUND)
+        // YELLOW -> Activo (BTC/USDT)
+        // GREEN  -> Dinero y Porcentajes (Spread/PnL)
 
-        BotLogger.info(String.format(java.util.Locale.US,
-                "⚡ MATCH_FOUND | %s | %s -> %s | Spread: %.2f%% | Est.PnL: $%.4f | Src: %s",
+        String formattedMsg = String.format(java.util.Locale.US,
+                BotLogger.CYAN + "⚡ MATCH_FOUND" + BotLogger.RESET + " | " +
+                        BotLogger.YELLOW + "%-8s" + BotLogger.RESET + " | %s -> %s | " +
+                        "Spread: " + BotLogger.GREEN + "%.2f%%" + BotLogger.RESET + " | " +
+                        "Est.PnL: " + BotLogger.GREEN + "$%.4f" + BotLogger.RESET + " | Src: %s",
                 opp.asset(),
                 opp.buyExchange(),
                 opp.sellExchange(),
                 opp.grossSpreadPct() * 100,
                 opp.expectedProfit(),
                 opp.signalSource()
-        ));
+        );
+
+        // 1. Log a consola y archivo general
+        BotLogger.info(formattedMsg);
+
+        // 2. (Opcional pero recomendado) Registrar en el CSV de Oportunidades
+        // Esto llena el archivo opportunities.csv definido en BotLogger
+        BotLogger.logOpportunity(
+                "ARBITRAGE",               // Type/Strategy
+                opp.asset(),               // Asset
+                opp.buyExchange() + "->" + opp.sellExchange(), // Route
+                opp.grossSpreadPct() * 100, // Gross Gap
+                opp.expectedProfit(),       // Net Profit
+                "DETECTED",                 // Status
+                "Source: " + opp.signalSource() // Reason
+        );
     }
 
     private void sendTelegramReport() {
@@ -311,23 +357,29 @@ public class DeepMarketScanner implements MarketListener {
         long hits = dataProvider.getCacheHits();
         long trades = tradesCount.get();
         double pnl = totalPotentialProfit.sum();
+        // Usamos hora local del servidor
         String time = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm"));
 
-        // 2. Construir mensaje bonito
+        // 2. Construir mensaje bonito (Markdown seguro)
+        // Nota: Telegram Markdown a veces da problemas con caracteres como '_',
+        // pero para este template simple funcionará bien.
         String report = """
-                📊 **REPORTE DE ESTADO** (%s)
-                
-                💰 **PnL Estimado:** $%.2f
-                🔫 **Trades Detectados:** %d
-                ⚡ **Cache Hits:** %d
-                
-                🛡️ *Sistema Operativo y Vigilando...*
-                """.formatted(time, pnl, trades, hits);
+            📊 *REPORTE DE ESTADO* (%s)
+            
+            💰 *PnL Estimado:* $%.2f
+            🔫 *Trades Detectados:* %d
+            ⚡ *Cache Hits:* %d
+            
+            🛡️ _Sistema Operativo y Vigilando..._
+            """.formatted(time, pnl, trades, hits);
 
-        // 3. Loguear en consola Y ENVIAR a Telegram
-        BotLogger.info("📨 Enviando reporte periódico a Telegram...");
+        BotLogger.info("📨 Enviando reporte periódico...");
+        // MÉTODO CON FORMATO
+        BotLogger.sendMarkdown(report);
+
         BotLogger.sendTelegram(report);
     }
+
     public void setDryRun(boolean dryRun) {
         this.dryRun = dryRun;
         if (crossExecutor != null) crossExecutor.setDryRun(dryRun);
@@ -340,26 +392,6 @@ public class DeepMarketScanner implements MarketListener {
         virtualExecutor.shutdownNow();
         pairSelector.stop();
     }
-    // =========================================================
-    // 🛠️ MÉTODOS DE COMPATIBILIDAD (PARA GOLDRUSHORCHESTRATOR)
-    // ========================================================
-
-
-
-    /**
-     * Legacy Support: Obtiene el PnL total acumulado.
-     */
-    public double getTotalPotentialProfit() {
-        return totalPotentialProfit.sum();
-    }
-
-    /**
-     * Legacy Support: Obtiene el contador de trades.
-     */
-    public long getTradesCount() {
-        return tradesCount.get();
-    }
-
     // Método para incluir Lógica Oracle
     private void processAssetWithOracle(String asset, Map<String, Map<String, Double>> prices) {
         for (ArbitrageStrategy strategy : strategies) {
@@ -381,11 +413,12 @@ public class DeepMarketScanner implements MarketListener {
                 String targetEx = opp.buyExchange().equals(BotConfig.ADVISOR_REF_EXCHANGE)
                         ? opp.sellExchange()
                         : opp.buyExchange();
+                /*
                 if (opp.grossSpreadPct() < BotConfig.getMinScanSpread()) {
                     dashboard.registrarTraza(new ArbitrageTrace(asset, ArbitrageTrace.AuditStage.SCAN_IGNORED, "Spread bajo", opp.grossSpreadPct()));
                     continue;
                 }
-
+*/
 
                 // 3. FILTRADO DINÁMICO
                 // Si el spread es menor al sugerido por el oráculo, descartamos.
@@ -405,10 +438,38 @@ public class DeepMarketScanner implements MarketListener {
 
                 if (verified != null) {
                     executeOpportunity(verified);
+                } else {
+                    dashboard.registrarTrazaDecision(
+                            asset,
+                            ArbitrageTrace.AuditStage.ADVISOR_REJECTED,
+                            "Fees > Spread",
+                            opp.grossSpreadPct()
+                    );
                 }
             }
         }
     }
+    // =========================================================
+    // 🛠️ MÉTODOS DE COMPATIBILIDAD (PARA GOLDRUSHORCHESTRATOR)
+    // ========================================================
+
+
+
+    /**
+     *      Obtiene el PnL total acumulado.
+     */
+    public double getTotalPotentialProfit() {
+        return totalPotentialProfit.sum();
+    }
+
+    /**
+     *      Obtiene el contador de trades.
+     */
+    public long getTradesCount() {
+        return tradesCount.get();
+    }
+
+
     // =================================================================================
     // 🌆 TOKYO NEON DASHBOARD (VISUALIZACIÓN TÁCTICA)
     // =================================================================================
@@ -430,11 +491,27 @@ public class DeepMarketScanner implements MarketListener {
 
     private void printCyberpunkDashboard() {
         // 1. SILENCIO: Actualizamos el HTML en segundo plano sin imprimir nada
+        // 1. Recolectar datos frescos (SIN CALCULAR NADA, SOLO LEER)
+        // Suponiendo que tienes acceso a metricsService aquí
+        var recentLatencies = metricsService.getRecentLatencyHistory();
+
+        // Obtener el último desglose (o el promedio de los últimos 10)
+        LatencyBreakdown lastTrade = recentLatencies.isEmpty() ? null : recentLatencies.getLast();
+
+        // 2. SILENCIO: Actualizamos el HTML en segundo plano
         dashboard.updateNetwork(networkLatencies);
         dashboard.updateStats(cyclesCount.get(), totalPotentialProfit.sum());
+        dashboard.updateNetwork(networkLatencies);
+        dashboard.updateStats(cyclesCount.get(), totalPotentialProfit.sum());
+        if (lastTrade != null) {
+            dashboard.updateTelemetry(
+                    lastTrade.netInUs(),
+                    lastTrade.logicUs(),
+                    lastTrade.netOutUs()
+            );
+        }
         dashboard.generate(); // Escribe dashboard.html
     }
-    // EN DeepMarketScanner.java (Implementando MarketListener)
 
     @Override
     public void reportRadarDetection(String symbol, double score, double spreadPct, double volatility) {

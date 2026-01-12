@@ -3,6 +3,7 @@ package com.rafaeldiaz.orquestador_gold_rush_2025.core.orchestrator;
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector;
 import com.rafaeldiaz.orquestador_gold_rush_2025.connect.ExchangeConnector.OrderBook;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.FeeManager;
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.analysis.PortfolioHealthManager;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.estimator.StandardProfitEstimator;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.platform.ExchangeRegistry;
 import com.rafaeldiaz.orquestador_gold_rush_2025.model.ArbitrageOpportunity;
@@ -58,7 +59,8 @@ public class ArchitectureValidationTest {
 
             // Mock Data Provider (Simulado manual)
             FeeManager feeManager = new FeeManager(new ExchangeConnector()); // Dummy connector
-            StandardProfitEstimator estimator = new StandardProfitEstimator(feeManager, List.of(capital));
+            PortfolioHealthManager cfo = new PortfolioHealthManager(new ExchangeConnector());
+            StandardProfitEstimator estimator = new StandardProfitEstimator(feeManager, cfo, List.of(capital));
 
             // Creamos oportunidad "Cruda" (Detectada por estrategia, sin cantidades)
             ArbitrageOpportunity rawOpp = new ArbitrageOpportunity(

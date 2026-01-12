@@ -45,6 +45,8 @@ public class CrossTradeExecutor {
             BotLogger.info("[DRY-RUN] Cross: Buy " + buyExchange + " / Sell " + sellExchange + " Qty: " + qty);
             return;
         }
+        double capitalUsdt = qty * buyPriceLog;
+        // LOG DE INICIO DE BATALLA
 
         // --- FUEGO PARALELO (ESTÁNDAR JAVA 21+) ---
         // Usamos un Executor efímero que lanza un Hilo Virtual por cada tarea.
@@ -54,12 +56,26 @@ public class CrossTradeExecutor {
             // 1. DISPARAR (FORK)
             // Enviamos las dos balas al mismo tiempo. No bloquea aquí.
             Future<OrderResult> fBuy = executor.submit(() ->
-                    connector.placeOrder(buyExchange, pair, "BUY", "MARKET", qty, 0)
-            );
+                    connector.placeOrder(
+                            buyExchange,
+                            pair,
+                            "BUY",
+                            "MARKET",
+                            capitalUsdt, // <--- Importante: Pasa el CAPITAL en USDT (ej. 50.0), no la cantidad de tokens
+                            0,
+                            true     // <--- ¡ESTE TRUE ES LA CLAVE! Activa el modo "Gastar USDT
+                    ));
 
             Future<OrderResult> fSell = executor.submit(() ->
-                    connector.placeOrder(sellExchange, pair, "SELL", "MARKET", qty, 0)
-            );
+                    connector.placeOrder(
+                            sellExchange, // Exchange B (¡Ojo! Era buyExchange en tu snippet)
+                            pair,
+                            "SELL",       // (¡Ojo! Era BUY en tu snippet)
+                            "MARKET",
+                            qty,          // <--- Enviamos Tokens (Ej. 25.5 IMX)
+                            0,
+                            false         // <--- FALSE: "Vender X Tokens" (Base Order)
+                    ));
 
             // 2. RECOLECTAR (JOIN)
             // .get() esperará a que el hilo virtual termine.
@@ -72,6 +88,8 @@ public class CrossTradeExecutor {
 
         } catch (Exception e) {
             BotLogger.error("🔥 Error Crítico en Executor: " + e.getMessage());
+            DecisionAuditor.log("SPATIAL", pair, "SYSTEM_ERROR", 0
+                    , 0, "EJECUCION", "ERROR", e.getMessage());
         }
     }
     private void processResults(String buyEx, OrderResult buyRes, String sellEx, OrderResult sellRes, String pair, double originalQty) {
@@ -83,11 +101,10 @@ public class CrossTradeExecutor {
         if (buyOk && sellOk) {
             double pnl = (sellRes.executedValue()) - (buyRes.executedValue());
         // ✅ BATALLA: VICTORIA
-            DecisionAuditor.log("EXECUTOR", pair, route, 0.0, pnl,
-                    "BATALLA", "VICTORIA", "PnL Real: $" + String.format("%.4f", pnl));
+            DecisionAuditor.log("SPATIAL", pair, route, 0.0, pnl,
+                    "BATALLA", "EXIT_FILLED", "PnL Real: $" + String.format("%.4f", pnl));
             // Reporte asíncrono
             Thread.ofVirtual().start(() -> riskManager.reportTradeResult(pnl));
-
             coordinator.reportSuccess(buyEx);
             coordinator.reportSuccess(sellEx);
             BotLogger.info("✅ CROSS WIN: PnL estimado $" + pnl);
@@ -96,6 +113,33 @@ public class CrossTradeExecutor {
 
         // B. FALLO PARCIAL (ROLLBACK)
         handlePartialFailure(buyEx, buyRes, sellEx, sellRes, pair);
+    }
+
+    private void handlePartialFailure(String buyEx, OrderResult buyRes, String sellEx, OrderResult sellRes, String pair) {
+        boolean buyOk = (buyRes != null && buyRes.isFilled());
+        boolean sellOk = (sellRes != null && sellRes.isFilled());
+
+        if (buyOk && !sellOk) {
+            BotLogger.warn("🔄 ROLLBACK: Vendiendo en " + buyEx + " (Fallo venta en " + sellEx + ")");
+            connector.placeOrder(buyEx, pair, "SELL", "MARKET", buyRes.executedQty(), 0);
+            coordinator.reportFailure(sellEx);
+            // 📝 AUDITORÍA: HUÉRFANO (COMPRA OK, VENTA FAIL)
+            DecisionAuditor.log("SPATIAL", pair, buyEx + "->X", 0, -1.0,
+                    "BATALLA", "ORPHAN_DETECTED", "Fallo Venta " + sellEx + ". Rollback intentado.");
+        }
+        else if (!buyOk && sellOk) {
+            BotLogger.warn("🔄 ROLLBACK: Re-comprando en " + sellEx + " (Fallo compra en " + buyEx + ")");
+            connector.placeOrder(sellEx, pair, "BUY", "MARKET", sellRes.executedQty(), 0);
+            coordinator.reportFailure(buyEx);
+            // 📝 AUDITORÍA: HUÉRFANO (COMPRA FAIL, VENTA OK)
+            DecisionAuditor.log("SPATIAL", pair, "X->" + sellEx, 0, -1.0,
+                    "BATALLA", "ORPHAN_DETECTED", "Fallo Compra " + buyEx + ". Rollback intentado.");
+        }
+        else {
+            BotLogger.error("❌ FALLO TOTAL: Ninguna orden entró.");
+            // 📝 AUDITORÍA: ERROR DE SALIDA
+            DecisionAuditor.log("SPATIAL", pair, "FAIL->FAIL", 0, 0,
+                    "EJECUCION", "ORDER_FAILED", "Rechazo simultáneo ambos lados.");        }
     }
     // Método auxiliar para manejar el .get() sin ensuciar la lógica principal con try-catch
     private OrderResult safeGet(Future<OrderResult> future) {
@@ -107,26 +151,6 @@ public class CrossTradeExecutor {
         } catch (ExecutionException e) {
             BotLogger.error("⚠️ Error en ejecución de orden: " + e.getCause().getMessage());
             return null;
-        }
-    }
-
-
-    private void handlePartialFailure(String buyEx, OrderResult buyRes, String sellEx, OrderResult sellRes, String pair) {
-        boolean buyOk = (buyRes != null && buyRes.isFilled());
-        boolean sellOk = (sellRes != null && sellRes.isFilled());
-
-        if (buyOk && !sellOk) {
-            BotLogger.warn("🔄 ROLLBACK: Vendiendo en " + buyEx + " (Fallo venta en " + sellEx + ")");
-            connector.placeOrder(buyEx, pair, "SELL", "MARKET", buyRes.executedQty(), 0);
-            coordinator.reportFailure(sellEx);
-        }
-        else if (!buyOk && sellOk) {
-            BotLogger.warn("🔄 ROLLBACK: Re-comprando en " + sellEx + " (Fallo compra en " + buyEx + ")");
-            connector.placeOrder(sellEx, pair, "BUY", "MARKET", sellRes.executedQty(), 0);
-            coordinator.reportFailure(buyEx);
-        }
-        else {
-            BotLogger.error("❌ FALLO TOTAL: Ninguna orden entró. (Sin impacto financiero)");
         }
     }
 }

@@ -31,4 +31,21 @@ public record ArbitrageOpportunity(
     public String getPair() {
         return asset + "USDT";
     }
+    @Override
+    public String toString() {
+        // Capacidad estimada: 12 campos + separadores ~ 200 caracteres
+        StringBuilder sb = new StringBuilder(200);
+        sb.append(detectedAtTimestamp).append(',')     // HORA (Timestamp)
+                .append(strategyType).append(',')            // ESTRATEGIA
+                .append(asset).append(',')                   // ACTIVO
+                .append(buyExchange).append("->").append(sellExchange).append(',') // RUTA
+                .append(String.format("%.8f", priceEntry)).append(',')
+                .append(String.format("%.8f", priceExit)).append(',')
+                .append(String.format("%.6f", grossSpreadPct)).append(',')
+                .append(String.format("%.6f", quantity)).append(',')
+                .append(String.format("%.6f", expectedProfit)).append(',')
+                .append(String.format("%.2f", probabilityScore)).append(',')
+                .append(signalSource);
+        return sb.toString();
+    }
 }

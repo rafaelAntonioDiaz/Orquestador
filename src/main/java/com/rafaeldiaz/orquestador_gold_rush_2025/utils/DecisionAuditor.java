@@ -1,5 +1,6 @@
 package com.rafaeldiaz.orquestador_gold_rush_2025.utils;
 
+import com.rafaeldiaz.orquestador_gold_rush_2025.core.telemetry.ArbitrageTrace;
 import com.rafaeldiaz.orquestador_gold_rush_2025.core.telemetry.DashboardService;
 
 import java.io.BufferedWriter;
@@ -43,26 +44,50 @@ public class DecisionAuditor {
     }
     public static void setDashboard(DashboardService ds) { dashboard = ds; }
     /**
-     * Toma la instantánea.
-     * @param spreadRaw Spread en decimal (ej: 0.005 para 0.5%)
+     * REGISTRO DE FILTROS (Cuando la oportunidad es rechazada antes de operar)
+     * @param asset Par (ej: BTC/USDT)
+     * @param stage Razón del rechazo (ej: SPREAD_TOO_LOW)
+     * @param message Detalle técnico
+     * @param evidence Valor que causó el rechazo (ej: el spread real encontrado)
      */
+    public static void logFilter(String asset, ArbitrageTrace.AuditStage stage, String message, double evidence) {
+        // Constructor 1 de ArbitrageTrace (Ligero)
+        ArbitrageTrace trace = new ArbitrageTrace(asset, stage, message, evidence);
+        logQueue.offer(trace.toString());
+    }
 
+    /**
+     * REGISTRO FORENSE (Cuando hubo ejecución, exitosa o fallida)
+     * @param asset Par operado
+     * @param stage Estado final (EXIT_FILLED, ORDER_FAILED)
+     * @param exA Exchange Compra
+     * @param exB Exchange Venta
+     * @param expProfit Profit Estimado
+     * @param realProfit Profit Real
+     * @param duration Duración ms
+     * @param slippage Slippage sufrido
+     * @param msg Notas
+     */
+    public static void logExecution(String asset, ArbitrageTrace.AuditStage stage, String exA, String exB,
+                                    double expProfit, double realProfit, long duration,
+                                    double slippage, String msg) {
+        // Constructor 2 de ArbitrageTrace (Completo)
+        ArbitrageTrace trace = new ArbitrageTrace(asset, stage, exA, exB, expProfit, realProfit, duration, slippage, msg);
+        logQueue.offer(trace.toString());
+    }
 
-    public static void log(String strategy, String asset, String route, double spreadRaw,
-                           double pnlEstimated, String stage, String status, String detail) {
-
-        if (spreadRaw <= 0) return;
-
-        // 1. Log existente al CSV (Async I/O)
-        String line = String.format("%s,%s,%s,%s,%.4f%%,%.4f,%s,%s,%s",
-                LocalTime.now().format(timeFmt), strategy, asset, route,
-                spreadRaw * 100, pnlEstimated, stage, status, detail.replace(",", ";")
-        );
-        logQueue.offer(line);
-
-        // 2. NUEVO: Log en vivo al Dashboard
-        if (dashboard != null) {
-            dashboard.registrarTrazaDecision(asset, stage, status, detail, spreadRaw * 100);
+    /**
+     * Método de compatibilidad (si tienes código viejo llamando a 'log')
+     * Redirige a logFilter.
+     */
+    public static void log(String ignoredStrategy, String asset, String ignoredRoute, double spreadRaw,
+                           double ignoredPnl, String stageStr, String status, String detail) {
+        try {
+            ArbitrageTrace.AuditStage stage = ArbitrageTrace.AuditStage.valueOf(stageStr); // Intenta mapear el string al enum
+            logFilter(asset, stage, detail, spreadRaw);
+        } catch (IllegalArgumentException e) {
+            // Si el string no coincide con el enum, lo mandamos como SYSTEM_MSG
+            logFilter(asset, ArbitrageTrace.AuditStage.SYSTEM_MSG, status + ": " + detail, spreadRaw);
         }
     }
 }

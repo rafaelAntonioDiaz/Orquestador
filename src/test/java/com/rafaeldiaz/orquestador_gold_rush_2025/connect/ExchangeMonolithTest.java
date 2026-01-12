@@ -67,7 +67,7 @@ class ExchangeMonolithTest {
                 .contains("\"tdMode\": \"cash\"") // Crítico para Spot
                 .contains("\"side\": \"sell\"")
                 .contains("\"ordType\": \"limit\"")
-                .contains("\"sz\": \"1.50000000\"");
+                .contains("\"sz\": \"1.50\"");
     }
 
     // =========================================================================

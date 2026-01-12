@@ -41,6 +41,9 @@ public class DashboardService {
     // Auditoría
     private final Deque<ArbitrageTrace> auditTrail = new ConcurrentLinkedDeque<>();
     private final int MAX_AUDIT_ENTRIES = 50;
+    private long lastNetIn = 0;
+    private long lastLogic = 0;
+    private long lastNetOut = 0;
 
     // =================================================================================
     // 🔥 NUEVO MÉTODO PARA EL WATCHDOG
@@ -108,30 +111,29 @@ public class DashboardService {
         auditTrail.offerFirst(new ArbitrageTrace("SYSTEM", ArbitrageTrace.AuditStage.SYSTEM_MSG, message, val));
     }
 
-
-    public void updateInventory(Map<String, Map<String, Double>> balances, Map<String, Double> refPrices) {
+    // Reemplace su método updateInventory por este en DashboardService.java
+    public void updateInventory(Map<String, Map<String, Double>> balances, Map<String, Double> prices) {
         StringBuilder sb = new StringBuilder();
-        // Agregamos colgroup para controlar el ancho de las columnas
         sb.append("<table style='table-layout: fixed; width: 100%;'>");
-        sb.append("<colgroup><col style='width: 40%;'><col style='width: 20%;'><col style='width: 40%;'></colgroup>");
+        sb.append("<colgroup><col style='width: 35%;'><col style='width: 25%;'><col style='width: 40%;'></colgroup>");
         sb.append("<tr style='color:var(--accent); font-size:10px;'><th>EXCHANGE</th><th>ASSET</th><th style='text-align:right'>QTY</th></tr>");
 
         balances.forEach((ex, assets) -> {
             assets.forEach((asset, qty) -> {
-                // Calcular valor en USD para el filtro de 5 USDT
-                double price = refPrices.getOrDefault(asset + "USDT", 1.0);
+                // --- LÓGICA DE FILTRADO (IGNORAR < 5 USDT) ---
+                double price = prices.getOrDefault(asset + "USDT", 1.0); // 1.0 si es USDT mismo
                 double valueUsdt = qty * price;
 
-                // FILTRO: Ignorar < 5 USDT excepto BNB/MX (para fees)
+                // Solo mostramos si vale más de 5 USDT o si es moneda de fees (BNB/MX)
                 if (valueUsdt >= 5.0 || asset.equals("BNB") || asset.equals("MX")) {
+                    boolean lowBalance = qty < 0.1;
                     sb.append("<tr>");
-                    // Usamos el nombre completo del exchange, no el substring
+                    // Eliminamos el .substring(0,2) para ver el nombre completo
                     sb.append("<td style='color:#666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;'>")
                             .append(ex.toUpperCase()).append("</td>");
                     sb.append("<td style='font-weight:bold'>").append(asset).append("</td>");
 
-                    // Alerta de recarga si es muy bajo (0.1 unidades)
-                    if (qty < 0.1 && !asset.equals("BNB") && !asset.equals("MX") && !asset.equals("USDT")) {
+                    if (lowBalance && !asset.equals("BNB") && !asset.equals("MX") && !asset.equals("USDT")) {
                         sb.append("<td style='text-align:right;' class='alert-fill'>⚠️ RECARGAR</td>");
                     } else {
                         sb.append("<td style='text-align:right; color:#fff; font-family: monospace;'>")
@@ -170,7 +172,8 @@ public class DashboardService {
             .kpi { font-size: 28px; font-weight: bold; color: #fff; }
             .kpi-label { font-size: 10px; text-transform: uppercase; color: var(--muted); margin-bottom: 5px; letter-spacing: 1px; }
             table { width: 100%%; border-collapse: collapse; font-size: 11px; }
-            td, th { padding: 3px 5px; border-bottom: 1px solid #222; text-align: left; }
+            td, th { padding: 5px 8px; border-bottom: 1px solid #222; }
+            .card table th { letter-spacing: 0.5px; color: var(--muted); border-bottom: 2px solid #222; }
             
             /* Nuevos Estilos Radar */
             .radar-score-high { color: var(--danger); font-weight: bold; animation: pulse 2s infinite; }
@@ -191,6 +194,7 @@ public class DashboardService {
             ::-webkit-scrollbar { width: 6px; }
             ::-webkit-scrollbar-track { background: #000; }
             ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+            
         </style>
     </head>
     <body>
@@ -446,20 +450,18 @@ public class DashboardService {
         }
         return sb.toString();
     }
-    // En DashboardService.java
-    public void registrarTrazaDecision(String asset, String stage, String status, String detail, double data) {
-        // Creamos una traza compatible con su tabla de Auditoría
+    public void registrarTrazaDecision(String asset, ArbitrageTrace.AuditStage stage, String detail, double data) {
+        // Usamos el Constructor 1 de tu clase (Para filtros/rechazos/simulaciones simples)
         ArbitrageTrace traza = new ArbitrageTrace(
                 asset,
-                mapStage(stage), // Mapeamos el String del Auditor al Enum del Dashboard
+                stage,
                 detail,
                 data
         );
 
-        // Inyectamos en la lista que lee el método generateAuditRows()
+        // Inyectamos directo al flujo
         this.registrarTraza(traza);
     }
-
     private ArbitrageTrace.AuditStage mapStage(String stage) {
         return switch (stage.toUpperCase()) {
             case "ESTRATEGIA" -> ArbitrageTrace.AuditStage.SCAN_IGNORED;
@@ -468,5 +470,10 @@ public class DashboardService {
             case "BATALLA" -> ArbitrageTrace.AuditStage.EXIT_FILLED;
             default -> ArbitrageTrace.AuditStage.SYSTEM_MSG;
         };
+    }
+    public void updateTelemetry(long netInUs, long logicUs, long netOutUs) {
+        this.lastNetIn = netInUs;
+        this.lastLogic = logicUs;
+        this.lastNetOut = netOutUs;
     }
 }

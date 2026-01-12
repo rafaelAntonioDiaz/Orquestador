@@ -76,7 +76,7 @@ public class MarketPulseEstimator {
             double spreadBruto = (sellPrice - buyPrice);
 
             // Fee Red Fijo (Fallback a 0.0002 SOL ~= $0.02 si falla API)
-            double withdrawFeeNative = feeManager.getWithdrawalFee(BUY_EXCHANGE, ASSET);
+            double withdrawFeeNative = feeManager.getTradingFee(BUY_EXCHANGE, ASSET, "MAKER");
             if (withdrawFeeNative < 0) withdrawFeeNative = 0.0002;
             double networkFeeUsd = withdrawFeeNative * sellPrice;
 

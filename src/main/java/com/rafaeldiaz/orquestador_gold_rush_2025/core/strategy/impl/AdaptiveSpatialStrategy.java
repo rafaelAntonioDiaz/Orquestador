@@ -122,7 +122,66 @@ public class AdaptiveSpatialStrategy implements ArbitrageStrategy {
                 }
             }
         }
-
+        opportunities = prioritizeMexcRoutes(opportunities);
         return opportunities;
+    }
+    /**
+     * 🎯 OPTIMIZADOR MEXC-FIRST CASCADE
+     *
+     * Prioriza rutas en este orden:
+     * 1. MEXC ↔ MEXC (0% fees)
+     * 2. MEXC → Otro (0% + X%)
+     * 3. Otro → MEXC (X% + 0%)
+     * 4. Otro ↔ Otro (X% + Y%)
+     *
+     * @param opportunities Lista original de oportunidades
+     * @return Lista ordenada por costo de fees (menor a mayor)
+     */
+    private List<ArbitrageOpportunity> prioritizeMexcRoutes(List<ArbitrageOpportunity> opportunities) {
+        // Separamos en 4 buckets según la lógica cascade
+        List<ArbitrageOpportunity> tier1 = new ArrayList<>(); // MEXC ↔ MEXC
+        List<ArbitrageOpportunity> tier2 = new ArrayList<>(); // MEXC → Otro
+        List<ArbitrageOpportunity> tier3 = new ArrayList<>(); // Otro → MEXC
+        List<ArbitrageOpportunity> tier4 = new ArrayList<>(); // Otro ↔ Otro
+
+        for (ArbitrageOpportunity opp : opportunities) {
+            String buy = opp.buyExchange();
+            String sell = opp.sellExchange();
+
+            // Tier 1: Ambos son MEXC (imposible por diseño, pero lo dejamos por completitud)
+            if (buy.equals("mexc") && sell.equals("mexc")) {
+                tier1.add(opp);
+            }
+            // Tier 2: MEXC compra (Maker = 0%)
+            else if (buy.equals("mexc")) {
+                tier2.add(opp);
+            }
+            // Tier 3: MEXC vende (Taker = 0%)
+            else if (sell.equals("mexc")) {
+                tier3.add(opp);
+            }
+            // Tier 4: Sin MEXC
+            else {
+                tier4.add(opp);
+            }
+        }
+
+        // Ordenamos cada tier por spread (mayor a menor) dentro de su categoría
+        Comparator<ArbitrageOpportunity> bySpread =
+                (o1, o2) -> Double.compare(o2.grossSpreadPct(), o1.grossSpreadPct());
+
+        tier1.sort(bySpread);
+        tier2.sort(bySpread);
+        tier3.sort(bySpread);
+        tier4.sort(bySpread);
+
+        // Concatenamos en orden de prioridad
+        List<ArbitrageOpportunity> result = new ArrayList<>();
+        result.addAll(tier1);
+        result.addAll(tier2);
+        result.addAll(tier3);
+        result.addAll(tier4);
+
+        return result;
     }
 }

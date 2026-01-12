@@ -103,35 +103,12 @@ public class BotLogger {
             consumerThread.setName("Async-Log-Worker");
             consumerThread.setDaemon(true);
             consumerThread.start();
-            Thread dashboardThread = Thread.ofVirtual().name("dashboard-ui").start(() -> {
-                while (true) {
-                    try {
-                        // Espera 60 segundos
-                        Thread.sleep(60_000);
-
-                        // Genera el cuadro
-                        String dashboard = DashboardRenderer.render(MetricsService.get());
-
-                        // Lo inyectamos directo en la cola de logs para que salga sincronizado
-                        // Usamos logTasks.offer para no bloquear
-                        logTasks.offer(() -> {
-                            // Imprimimos directo a System.out para saltarnos el formato de fecha/nivel del Logger
-                            // y que el cuadro se vea limpio.
-                            System.out.println(dashboard);
-                        });
-
-                    } catch (InterruptedException e) {
-                        break;
-                    }
-                }
-            });
 
         } catch (IOException e) {
             System.err.println("FATAL LOG ERROR: " + e.getMessage());
         }
 
     }
-
     // Método auxiliar para detectar arte ASCII ignorando colores ANSI
     private static boolean isTableBorder(String msg) {
         return msg.contains("╔") || msg.contains("╚") || msg.contains("╠") || msg.contains("║") || msg.startsWith("\n");
@@ -182,12 +159,35 @@ public class BotLogger {
         });
     }
 
+// En BotLogger.java
+
+// --- MÉTODOS TELEGRAM CORREGIDOS ---
+
+    /**
+     * 📨 ENVÍO SEGURO (TEXTO PLANO)
+     * Úsalo para logs, errores y mensajes del sistema.
+     * No fallará con caracteres raros como '_', '*', '[' de Java.
+     */
     public static void sendTelegram(String message) {
         if (TOKEN == null || TOKEN.isBlank() || CHAT_ID == null || CHAT_ID.isBlank()) return;
         Thread.ofVirtual().start(() -> {
             try {
                 String url = "https://api.telegram.org/bot" + TOKEN.replace("\"", "").trim() + "/sendMessage";
-                String jsonBody = String.format("{\"chat_id\": \"%s\", \"text\": \"%s\"}", CHAT_ID.replace("\"", "").trim(), message);
+
+                // Limpieza básica para JSON (Solo escapamos comillas y backslash)
+                String escapedMsg = message
+                        .replace("\\", "\\\\")
+                        .replace("\"", "\\\"")
+                        .replace("\n", "\\n")
+                        .replace("\r", "");
+
+                // SIN parse_mode (Texto puro y duro, a prueba de balas)
+                String jsonBody = String.format(
+                        "{\"chat_id\": \"%s\", \"text\": \"%s\"}",
+                        CHAT_ID.replace("\"", "").trim(),
+                        escapedMsg
+                );
+
                 RequestBody body = RequestBody.create(jsonBody, MediaType.parse("application/json"));
                 Request request = new Request.Builder().url(url).post(body).build();
                 httpClient.newCall(request).execute().close();
@@ -195,6 +195,43 @@ public class BotLogger {
         });
     }
 
+    /**
+     * 🎨 ENVÍO CON FORMATO (MARKDOWN)
+     * Úsalo SOLO para reportes controlados (Negritas, Cursivas).
+     */
+    public static void sendMarkdown(String message) {
+        if (TOKEN == null || TOKEN.isBlank() || CHAT_ID == null || CHAT_ID.isBlank()) return;
+        Thread.ofVirtual().start(() -> {
+            try {
+                String url = "https://api.telegram.org/bot" + TOKEN.replace("\"", "").trim() + "/sendMessage";
+
+                // Escapamos JSON
+                String escapedMsg = message
+                        .replace("\\", "\\\\")
+                        .replace("\"", "\\\"")
+                        .replace("\n", "\\n")
+                        .replace("\r", "");
+
+                // CON parse_mode: Markdown
+                String jsonBody = String.format(
+                        "{\"chat_id\": \"%s\", \"text\": \"%s\", \"parse_mode\": \"Markdown\"}",
+                        CHAT_ID.replace("\"", "").trim(),
+                        escapedMsg
+                );
+
+                RequestBody body = RequestBody.create(jsonBody, MediaType.parse("application/json"));
+                Request request = new Request.Builder().url(url).post(body).build();
+
+                try (Response response = httpClient.newCall(request).execute()) {
+                    if (!response.isSuccessful()) {
+                        // Si falla el Markdown, reintentamos como texto plano para no perder la info
+                        System.err.println("⚠️ Markdown falló (" + response.code() + "), reintentando plano...");
+                        sendTelegram(message);
+                    }
+                }
+            } catch (Exception e) { logger.severe("Telegram Error: " + e.getMessage()); }
+        });
+    }
     private static void initCSV() {
         File f = new File(CSV_FILE);
         if (!f.exists()) {
